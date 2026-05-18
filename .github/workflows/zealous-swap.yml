@@ -1,20 +1,29 @@
-name: CI
+name: zealous-swap CI
 
 permissions: {}
 
 on:
   push:
+    paths:
+      - "zealous-swap/**"
+      - ".github/workflows/zealous-swap.yml"
   pull_request:
+    paths:
+      - "zealous-swap/**"
+      - ".github/workflows/zealous-swap.yml"
   workflow_dispatch:
 
 jobs:
-  check:
-    name: Foundry project
+  test:
+    name: Build & Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: zealous-swap
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
           submodules: recursive
