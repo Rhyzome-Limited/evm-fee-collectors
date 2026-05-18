@@ -1,0 +1,23 @@
+# ─── Foundry build artifacts (all projects) ─────────────────────────────────
+**/cache/
+**/out/
+**/foundry.lock
+
+# ─── Dependencies — tracked via git submodules, not committed directly ───────
+# Ignore all lib dirs except known submodules
+zealous-swap/lib/*
+!zealous-swap/lib/forge-std
+
+# ─── Broadcast logs ──────────────────────────────────────────────────────────
+**/broadcast/*/31337/
+**/broadcast/**/dry-run/
+
+# ─── Env files ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+.logs/
+.ignore/
+node_modules/
