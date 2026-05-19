@@ -1,3 +1,6 @@
 [submodule "zealous-swap/lib/forge-std"]
 	path = zealous-swap/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
+[submodule "kasplex-bridge/lib/forge-std"]
+	path = kasplex-bridge/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

@@ -7,6 +7,8 @@
 # Ignore all lib dirs except known submodules
 zealous-swap/lib/*
 !zealous-swap/lib/forge-std
+kasplex-bridge/lib/*
+!kasplex-bridge/lib/forge-std
 
 # ─── Broadcast logs ──────────────────────────────────────────────────────────
 **/broadcast/*/31337/

@@ -1,0 +1,298 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test} from "forge-std/Test.sol";
+import {FeeCollector} from "../src/FeeCollector.sol";
+
+// ─── Mock Bridge ──────────────────────────────────────────────────────────────
+contract MockBridge {
+    bytes public lastPayload;
+    uint256 public lastValue;
+    bool public shouldFail;
+
+    function setShouldFail(bool _fail) external {
+        shouldFail = _fail;
+    }
+
+    function lockForBridge(bytes calldata payload) external payable returns (bool) {
+        if (shouldFail) return false;
+        lastPayload = payload;
+        lastValue = msg.value;
+        return true;
+    }
+
+    receive() external payable {}
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+contract FeeCollectorTest is Test {
+    FeeCollector public fc;
+    MockBridge public mockBridge;
+
+    address owner     = makeAddr("owner");
+    address withdrawer = makeAddr("withdrawer");
+    address user      = makeAddr("user");
+    address stranger  = makeAddr("stranger");
+
+    uint256 constant DEFAULT_FEE_RATE = 75; // 0.75%
+    uint256 constant FEE_DENOM = 10_000;
+    string  constant L1_ADDR = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
+
+    function setUp() public {
+        mockBridge = new MockBridge();
+        vm.prank(owner);
+        fc = new FeeCollector(owner, withdrawer, DEFAULT_FEE_RATE, address(mockBridge));
+        vm.deal(user, 1_000 ether);
+    }
+
+    // ─── Constructor ──────────────────────────────────────────────────────────
+
+    function test_initialState() public view {
+        assertEq(fc.owner(), owner);
+        assertEq(fc.withdrawer(), withdrawer);
+        assertEq(fc.feeRate(), DEFAULT_FEE_RATE);
+        assertEq(address(fc.bridge()), address(mockBridge));
+    }
+
+    function test_constructor_revertZeroOwner() public {
+        vm.expectRevert(FeeCollector.ZeroAddress.selector);
+        new FeeCollector(address(0), withdrawer, DEFAULT_FEE_RATE, address(mockBridge));
+    }
+
+    function test_constructor_revertZeroWithdrawer() public {
+        vm.expectRevert(FeeCollector.ZeroAddress.selector);
+        new FeeCollector(owner, address(0), DEFAULT_FEE_RATE, address(mockBridge));
+    }
+
+    function test_constructor_revertZeroBridge() public {
+        vm.expectRevert(FeeCollector.ZeroAddress.selector);
+        new FeeCollector(owner, withdrawer, DEFAULT_FEE_RATE, address(0));
+    }
+
+    function test_constructor_revertFeeRateTooHigh() public {
+        vm.expectRevert(FeeCollector.FeeRateTooHigh.selector);
+        new FeeCollector(owner, withdrawer, 1_001, address(mockBridge));
+    }
+
+    // ─── setOwner ─────────────────────────────────────────────────────────────
+
+    function test_setOwner() public {
+        address newOwner = makeAddr("newOwner");
+        vm.prank(owner);
+        fc.setOwner(newOwner);
+        assertEq(fc.owner(), newOwner);
+    }
+
+    function test_setOwner_revertNotOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotOwner.selector);
+        fc.setOwner(stranger);
+    }
+
+    function test_setOwner_revertZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert(FeeCollector.ZeroAddress.selector);
+        fc.setOwner(address(0));
+    }
+
+    // ─── setWithdrawer ────────────────────────────────────────────────────────
+
+    function test_setWithdrawer() public {
+        address nw = makeAddr("nw");
+        vm.prank(owner);
+        fc.setWithdrawer(nw);
+        assertEq(fc.withdrawer(), nw);
+    }
+
+    function test_setWithdrawer_revertNotOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotOwner.selector);
+        fc.setWithdrawer(stranger);
+    }
+
+    // ─── setFeeRate ───────────────────────────────────────────────────────────
+
+    function test_setFeeRate() public {
+        vm.prank(owner);
+        fc.setFeeRate(100);
+        assertEq(fc.feeRate(), 100);
+    }
+
+    function test_setFeeRate_toZero() public {
+        vm.prank(owner);
+        fc.setFeeRate(0);
+        assertEq(fc.feeRate(), 0);
+    }
+
+    function test_setFeeRate_revertNotOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotOwner.selector);
+        fc.setFeeRate(100);
+    }
+
+    function test_setFeeRate_revertTooHigh() public {
+        vm.prank(owner);
+        vm.expectRevert(FeeCollector.FeeRateTooHigh.selector);
+        fc.setFeeRate(1_001);
+    }
+
+    function test_setFeeRate_exactMax() public {
+        vm.prank(owner);
+        fc.setFeeRate(1_000);
+        assertEq(fc.feeRate(), 1_000);
+    }
+
+    // ─── calculateFee ─────────────────────────────────────────────────────────
+
+    function test_calculateFee_default() public view {
+        uint256 amount = 10 ether;
+        (uint256 fee, uint256 net) = fc.calculateFee(amount);
+        assertEq(fee, (amount * DEFAULT_FEE_RATE) / FEE_DENOM);
+        assertEq(net, amount - fee);
+    }
+
+    function testFuzz_calculateFee(uint256 amount) public view {
+        amount = bound(amount, 0, type(uint128).max);
+        (uint256 fee, uint256 net) = fc.calculateFee(amount);
+        assertEq(fee + net, amount);
+    }
+
+    // ─── bridgeToL1 ──────────────────────────────────────────────────────────
+
+    function test_bridgeToL1_basic() public {
+        uint256 kasIn = 10 ether;
+        uint256 expectedFee = (kasIn * DEFAULT_FEE_RATE) / FEE_DENOM;
+        uint256 expectedNet = kasIn - expectedFee;
+
+        vm.prank(user);
+        vm.expectEmit(true, false, false, true);
+        emit FeeCollector.FeeCollected(user, expectedFee);
+        fc.bridgeToL1{value: kasIn}(L1_ADDR);
+
+        // Fee stays in FeeCollector
+        assertEq(address(fc).balance, expectedFee);
+        // Bridge received net amount
+        assertEq(mockBridge.lastValue(), expectedNet);
+        assertEq(address(mockBridge).balance, expectedNet);
+    }
+
+    function test_bridgeToL1_payloadEncoding() public {
+        vm.prank(user);
+        fc.bridgeToL1{value: 5 ether}("kaspa:qtest");
+
+        // "kaspa:qtest" → each UTF-8 byte encoded as 2 hex chars
+        // length = 11 chars × 2 = 22 bytes
+        bytes memory payload = mockBridge.lastPayload();
+        assertEq(payload.length, bytes("kaspa:qtest").length * 2);
+
+        // Spot-check: 'k' = 0x6b → "6b"
+        assertEq(payload[0], bytes1("6"));
+        assertEq(payload[1], bytes1("b"));
+        // ':' = 0x3a → "3a"
+        assertEq(payload[10], bytes1("3"));
+        assertEq(payload[11], bytes1("a"));
+    }
+
+    function test_bridgeToL1_zeroFeeRate() public {
+        vm.prank(owner);
+        fc.setFeeRate(0);
+
+        uint256 kasIn = 5 ether;
+        vm.prank(user);
+        fc.bridgeToL1{value: kasIn}(L1_ADDR);
+
+        assertEq(address(fc).balance, 0);
+        assertEq(mockBridge.lastValue(), kasIn);
+    }
+
+    function test_bridgeToL1_revertZeroValue() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InsufficientValue.selector);
+        fc.bridgeToL1{value: 0}(L1_ADDR);
+    }
+
+    function test_bridgeToL1_revertBridgeFailed() public {
+        mockBridge.setShouldFail(true);
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.BridgeFailed.selector);
+        fc.bridgeToL1{value: 5 ether}(L1_ADDR);
+    }
+
+    function testFuzz_bridgeToL1(uint256 kasIn) public {
+        kasIn = bound(kasIn, 1 ether, 500 ether);
+        vm.deal(user, kasIn);
+
+        uint256 expectedFee = (kasIn * DEFAULT_FEE_RATE) / FEE_DENOM;
+        uint256 expectedNet = kasIn - expectedFee;
+
+        vm.prank(user);
+        fc.bridgeToL1{value: kasIn}(L1_ADDR);
+
+        assertEq(address(fc).balance, expectedFee);
+        assertEq(mockBridge.lastValue(), expectedNet);
+    }
+
+    // ─── withdrawNative ───────────────────────────────────────────────────────
+
+    function _accumulateFee(uint256 amount) internal {
+        vm.prank(user);
+        fc.bridgeToL1{value: amount}(L1_ADDR);
+    }
+
+    function test_withdrawNative_byWithdrawer() public {
+        _accumulateFee(10 ether);
+        uint256 bal = address(fc).balance;
+
+        vm.prank(withdrawer);
+        fc.withdrawNative(payable(withdrawer), bal);
+        assertEq(withdrawer.balance, bal);
+        assertEq(address(fc).balance, 0);
+    }
+
+    function test_withdrawNative_byOwner() public {
+        _accumulateFee(10 ether);
+        uint256 bal = address(fc).balance;
+
+        vm.prank(owner);
+        fc.withdrawNative(payable(owner), bal);
+        assertEq(owner.balance, bal);
+    }
+
+    function test_withdrawNative_revertNotWithdrawer() public {
+        _accumulateFee(10 ether);
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotWithdrawer.selector);
+        fc.withdrawNative(payable(stranger), 1 ether);
+    }
+
+    function test_withdrawNative_revertInsufficientBalance() public {
+        vm.deal(address(fc), 1 ether);
+        vm.prank(withdrawer);
+        vm.expectRevert(FeeCollector.InsufficientBalance.selector);
+        fc.withdrawNative(payable(withdrawer), 2 ether);
+    }
+
+    function test_withdrawAllNative() public {
+        _accumulateFee(10 ether);
+        uint256 bal = address(fc).balance;
+
+        vm.prank(withdrawer);
+        fc.withdrawAllNative(payable(withdrawer));
+        assertEq(withdrawer.balance, bal);
+        assertEq(address(fc).balance, 0);
+    }
+
+    function test_withdrawAllNative_revertEmpty() public {
+        vm.prank(withdrawer);
+        vm.expectRevert(FeeCollector.InsufficientBalance.selector);
+        fc.withdrawAllNative(payable(withdrawer));
+    }
+
+    function test_receive_nativeToken() public {
+        vm.deal(user, 1 ether);
+        vm.prank(user);
+        (bool ok,) = address(fc).call{value: 1 ether}("");
+        assertTrue(ok);
+        assertEq(address(fc).balance, 1 ether);
+    }
+}

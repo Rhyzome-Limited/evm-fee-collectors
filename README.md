@@ -4,19 +4,24 @@ Mono-repo for EVM fee collector contracts, one per DEX integration.
 
 ## Projects
 
-| Directory | DEX | Description |
-|-----------|-----|-------------|
+| Directory | DEX / Protocol | Description |
+|-----------|----------------|-------------|
 | [`zealous-swap/`](./zealous-swap/) | Zealous Swap | Wraps the Zealous Swap Router and charges a configurable fee on every swap |
+| [`kasplex-bridge/`](./kasplex-bridge/) | Kasplex Bridge | Wraps the Kasplex Bridge `lockForBridge` and charges a configurable fee on every L2 → L1 bridge |
 
 ## Structure
 
 ```
 evm-fee-collectors/
-└── zealous-swap/        # Zealous Swap fee collector (Foundry project)
+├── zealous-swap/        # Zealous Swap fee collector (Foundry project)
+│   ├── src/             # Contracts
+│   ├── test/            # Forge tests
+│   ├── script/          # Deploy scripts
+│   └── docs/            # Integration & deployment guides
+└── kasplex-bridge/      # Kasplex Bridge fee collector (Foundry project)
     ├── src/             # Contracts
     ├── test/            # Forge tests
-    ├── script/          # Deploy scripts
-    └── docs/            # Integration & deployment guides
+    └── script/          # Deploy scripts
 ```
 
 ## Getting Started
