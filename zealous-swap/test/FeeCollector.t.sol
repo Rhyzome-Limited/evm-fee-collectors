@@ -181,25 +181,37 @@ contract FeeCollectorTest is Test {
         new FeeCollector(owner, withdrawer, 1_001, address(mockRouter));
     }
 
-    // ─── setOwner ─────────────────────────────────────────────────────────────
+    // ─── transferOwnership / acceptOwnership ──────────────────────────────────
 
-    function test_setOwner() public {
+    function test_transferOwnership() public {
         address newOwner = makeAddr("newOwner");
         vm.prank(owner);
-        fc.setOwner(newOwner);
+        fc.transferOwnership(newOwner);
+        // pendingOwner set, owner unchanged until accepted
+        assertEq(fc.owner(), owner);
+        assertEq(fc.pendingOwner(), newOwner);
+        vm.prank(newOwner);
+        fc.acceptOwnership();
         assertEq(fc.owner(), newOwner);
+        assertEq(fc.pendingOwner(), address(0));
     }
 
-    function test_setOwner_revertNotOwner() public {
+    function test_transferOwnership_revertNotOwner() public {
         vm.prank(stranger);
         vm.expectRevert(FeeCollector.NotOwner.selector);
-        fc.setOwner(stranger);
+        fc.transferOwnership(stranger);
     }
 
-    function test_setOwner_revertZeroAddress() public {
+    function test_transferOwnership_revertZeroAddress() public {
         vm.prank(owner);
         vm.expectRevert(FeeCollector.ZeroAddress.selector);
-        fc.setOwner(address(0));
+        fc.transferOwnership(address(0));
+    }
+
+    function test_acceptOwnership_revertNotPending() public {
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotPendingOwner.selector);
+        fc.acceptOwnership();
     }
 
     // ─── setWithdrawer ────────────────────────────────────────────────────────
@@ -427,6 +439,20 @@ contract FeeCollectorTest is Test {
         fc.withdrawNative(payable(withdrawer), 2 ether);
         assertEq(address(fc).balance, 3 ether);
         assertEq(withdrawer.balance, 2 ether);
+    }
+
+    function test_withdrawAllNative() public {
+        vm.deal(address(fc), 5 ether);
+        vm.prank(withdrawer);
+        fc.withdrawAllNative(payable(withdrawer));
+        assertEq(address(fc).balance, 0);
+        assertEq(withdrawer.balance, 5 ether);
+    }
+
+    function test_withdrawAllNative_revertEmpty() public {
+        vm.prank(withdrawer);
+        vm.expectRevert(FeeCollector.InsufficientBalance.selector);
+        fc.withdrawAllNative(payable(withdrawer));
     }
 
     function test_withdrawNative_revertInsufficientBalance() public {

@@ -10,12 +10,15 @@ contract MockBridge {
     uint64  public lastUnlockAmountSompi;
     uint256 public lastValue;
     uint64  public mockFeeAmountSompi; // simulate bridge protocol fee
-    bool    public shouldRevert;
+    bool    public shouldRevert;       // quoteFee + requestExit both revert
+    bool    public requestExitReverts; // only requestExit reverts
 
     function setMockFee(uint64 _fee) external { mockFeeAmountSompi = _fee; }
     function setShouldRevert(bool _r) external { shouldRevert = _r; }
+    function setRequestExitReverts(bool _r) external { requestExitReverts = _r; }
 
     function quoteFee(address, uint64) external view returns (uint64) {
+        require(!shouldRevert, "quoteFee reverted");
         return mockFeeAmountSompi;
     }
 
@@ -24,7 +27,7 @@ contract MockBridge {
         payable
         returns (uint32 requestId, bytes32 messageId)
     {
-        if (shouldRevert) revert("bridge reverted");
+        if (shouldRevert || requestExitReverts) revert("bridge reverted");
         lastKasPayoutAddress = kasPayoutAddress;
         lastUnlockAmountSompi = unlockAmountSompi;
         lastValue = msg.value;
@@ -89,25 +92,36 @@ contract FeeCollectorTest is Test {
         new FeeCollector(owner, withdrawer, 1_001, address(mockBridge));
     }
 
-    // ─── setOwner ─────────────────────────────────────────────────────────────
+    // ─── transferOwnership / acceptOwnership ──────────────────────────────────
 
-    function test_setOwner() public {
-        address nw = makeAddr("nw");
+    function test_transferOwnership() public {
+        address newOwner = makeAddr("newOwner");
         vm.prank(owner);
-        fc.setOwner(nw);
-        assertEq(fc.owner(), nw);
+        fc.transferOwnership(newOwner);
+        assertEq(fc.owner(), owner);
+        assertEq(fc.pendingOwner(), newOwner);
+        vm.prank(newOwner);
+        fc.acceptOwnership();
+        assertEq(fc.owner(), newOwner);
+        assertEq(fc.pendingOwner(), address(0));
     }
 
-    function test_setOwner_revertNotOwner() public {
+    function test_transferOwnership_revertNotOwner() public {
         vm.prank(stranger);
         vm.expectRevert(FeeCollector.NotOwner.selector);
-        fc.setOwner(stranger);
+        fc.transferOwnership(stranger);
     }
 
-    function test_setOwner_revertZeroAddress() public {
+    function test_transferOwnership_revertZeroAddress() public {
         vm.prank(owner);
         vm.expectRevert(FeeCollector.ZeroAddress.selector);
-        fc.setOwner(address(0));
+        fc.transferOwnership(address(0));
+    }
+
+    function test_acceptOwnership_revertNotPending() public {
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotPendingOwner.selector);
+        fc.acceptOwnership();
     }
 
     // ─── setWithdrawer ────────────────────────────────────────────────────────
@@ -274,11 +288,38 @@ contract FeeCollectorTest is Test {
         assertGe(mockBridge.lastUnlockAmountSompi(), MIN_UNLOCK_SOMPI);
     }
 
-    function test_bridgeToL1_revertBridgeReverts() public {
+    function test_bridgeToL1_revertBridgeQuoteFails() public {
         mockBridge.setShouldRevert(true);
+        // quoteFee will also revert when shouldRevert is true
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.BridgeQuoteFailed.selector);
+        fc.bridgeToL1{value: 5_000 ether}(KAS_ADDR);
+    }
+
+    function test_bridgeToL1_revertBridgeReverts() public {
+        mockBridge.setRequestExitReverts(true);
         vm.prank(user);
         vm.expectRevert();
         fc.bridgeToL1{value: 5_000 ether}(KAS_ADDR);
+    }
+
+    function test_bridgeToL1_revertInvalidAddress_empty() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InvalidAddress.selector);
+        fc.bridgeToL1{value: 5_000 ether}("");
+    }
+
+    function test_bridgeToL1_revertInvalidAddress_noPrefix() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InvalidAddress.selector);
+        fc.bridgeToL1{value: 5_000 ether}("qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3k");
+    }
+
+    function test_bridgeToL1_revertInvalidAddress_tooLong() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InvalidAddress.selector);
+        // 91 bytes — exceeds max of 90
+        fc.bridgeToL1{value: 5_000 ether}("kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf22222222222222222222222");
     }
 
     function testFuzz_bridgeToL1(uint256 grossWei) public {

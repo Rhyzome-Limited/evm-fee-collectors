@@ -43,7 +43,7 @@ igra-bridge/
 ├── src/
 │   └── FeeCollector.sol    # Main contract
 ├── test/
-│   └── FeeCollector.t.sol  # Forge test suite (32 tests)
+│   └── FeeCollector.t.sol  # Forge test suite (37 tests)
 ├── script/
 │   └── DeployFeeCollector.s.sol
 ├── lib/
@@ -111,7 +111,8 @@ forge create src/FeeCollector.sol:FeeCollector \
 
 | Function | Description |
 |---|---|
-| `setOwner(address)` | Transfer ownership. |
+| `transferOwnership(address)` | Propose new owner (two-step). |
+| `acceptOwnership()` | New owner accepts transfer. |
 | `setWithdrawer(address)` | Change fee withdrawer. |
 | `setFeeRate(uint256)` | Set fee in basis points (max 1000 = 10%). |
 
@@ -142,9 +143,23 @@ Example: bridging 5,000 KAS at default 0.75%, bridge fee = 0
 ## Kaspa Address Requirements
 
 - Must start with `kaspa:`
-- Max 67 bytes total
-- Only bech32 characters after prefix: `qpzry9x8gf2tvdw0s3jn54khce6mua7l`
+- Max 90 bytes total
+- Main-net addresses are exactly 69 characters
 - No checksum validation — double-check your address before bridging
+
+## Errors
+
+| Error | Cause |
+|---|---|
+| `InsufficientValue` | `msg.value == 0` |
+| `BelowMinimum` | Net unlock < 1,000 KAS |
+| `ValueTooLarge` | `msg.value` overflows uint64 sompi conversion |
+| `BridgeFeeTooHigh` | Bridge protocol fee ≥ tentative unlock |
+| `BridgeQuoteFailed` | `quoteFee` external call reverted |
+| `InvalidAddress` | Kaspa address malformed or out of length range |
+| `FeeRateTooHigh` | Attempted fee rate > 1000 bps |
+| `ZeroAddress` | Zero address passed to a setter |
+| `NotOwner` / `NotWithdrawer` | Caller not authorized |
 
 ## Events
 
@@ -152,67 +167,7 @@ Example: bridging 5,000 KAS at default 0.75%, bridge fee = 0
 |---|---|
 | `FeeCollected(address indexed from, uint256 feeAmount)` | Fee charged on exit |
 | `NativeWithdrawn(address indexed to, uint256 amount)` | Fee withdrawal |
-| `OwnerSet(address indexed prev, address indexed next)` | Owner changed |
+| `OwnerSet(address indexed prev, address indexed next)` | Ownership transferred |
+| `OwnershipTransferProposed(address indexed current, address indexed proposed)` | Ownership transfer proposed |
 | `WithdrawerSet(address indexed prev, address indexed next)` | Withdrawer changed |
 | `FeeRateSet(uint256 prev, uint256 next)` | Fee rate changed |
-
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
-
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```

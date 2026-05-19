@@ -46,12 +46,14 @@ contract FeeCollector {
 
     // ─── State ───────────────────────────────────────────────────────────────
     address public owner;
+    address public pendingOwner;
     address public withdrawer;
     uint256 public feeRate;           // basis points (e.g. 75 = 0.75%)
     IKasExitBridge public immutable bridge;
 
     // ─── Events ──────────────────────────────────────────────────────────────
     event OwnerSet(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferProposed(address indexed currentOwner, address indexed proposedOwner);
     event WithdrawerSet(address indexed previousWithdrawer, address indexed newWithdrawer);
     event FeeRateSet(uint256 previousFeeRate, uint256 newFeeRate);
     event FeeCollected(address indexed from, uint256 feeAmount);
@@ -59,13 +61,18 @@ contract FeeCollector {
 
     // ─── Errors ──────────────────────────────────────────────────────────────
     error NotOwner();
+    error NotPendingOwner();
     error NotWithdrawer();
     error ZeroAddress();
     error FeeRateTooHigh();
     error TransferFailed();
     error InsufficientValue();
     error InsufficientBalance();
-    error BelowMinimum();         // net amount < 1,000 KAS after fee deduction
+    error BelowMinimum();       // net unlock < 1,000 KAS
+    error ValueTooLarge();      // msg.value so large it overflows uint64 sompi
+    error BridgeFeeTooHigh();   // bridge protocol fee >= tentative unlock
+    error BridgeQuoteFailed();  // quoteFee external call reverted
+    error InvalidAddress();
 
     // ─── Modifiers ───────────────────────────────────────────────────────────
     modifier onlyOwner() {
@@ -101,10 +108,17 @@ contract FeeCollector {
 
     // ─── Admin setters ───────────────────────────────────────────────────────
 
-    function setOwner(address _newOwner) external onlyOwner {
+    function transferOwnership(address _newOwner) external onlyOwner {
         if (_newOwner == address(0)) revert ZeroAddress();
-        emit OwnerSet(owner, _newOwner);
-        owner = _newOwner;
+        pendingOwner = _newOwner;
+        emit OwnershipTransferProposed(owner, _newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnerSet(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
     }
 
     function setWithdrawer(address _newWithdrawer) external onlyOwner {
@@ -141,7 +155,14 @@ contract FeeCollector {
     function bridgeToL1(string calldata kasPayoutAddress) external payable {
         if (msg.value == 0) revert InsufficientValue();
 
-        // 1. Deduct our fee
+        // Validate Kaspa address: non-empty, starts with "kaspa:", max 90 bytes
+        bytes memory addrBytes = bytes(kasPayoutAddress);
+        if (addrBytes.length < 7 || addrBytes.length > 90) revert InvalidAddress();
+        if (
+            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" ||
+            addrBytes[3] != "p" || addrBytes[4] != "a" || addrBytes[5] != ":"
+        ) revert InvalidAddress();
+
         uint256 ourFee  = (msg.value * feeRate) / FEE_DENOMINATOR;
         uint256 netWei  = msg.value - ourFee;
 
@@ -149,6 +170,7 @@ contract FeeCollector {
         //    Safe: netWei / 1e10 fits uint64 for any realistic KAS amount
         //    (uint64 max ≈ 1.8e19 sompi = 184 billion KAS)
         // forge-lint: disable-next-line(unsafe-typecast)
+        if (netWei / SOMPI_SCALE > type(uint64).max) revert ValueTooLarge();
         uint64 tentativeUnlock = uint64(netWei / SOMPI_SCALE);
         if (tentativeUnlock < MIN_UNLOCK_SOMPI) revert BelowMinimum();
 
@@ -156,7 +178,13 @@ contract FeeCollector {
         //    Bridge fee is deducted from the unlock amount — the user receives
         //    (tentativeUnlock - bridgeFee) on L1. Total wei forwarded to bridge
         //    stays constant at tentativeUnlock * SOMPI_SCALE.
-        uint64 bridgeFee      = bridge.quoteFee(address(this), tentativeUnlock);
+        uint64 bridgeFee;
+        try bridge.quoteFee(address(this), tentativeUnlock) returns (uint64 _fee) {
+            bridgeFee = _fee;
+        } catch {
+            revert BridgeQuoteFailed();
+        }
+        if (bridgeFee >= tentativeUnlock) revert BridgeFeeTooHigh();
         uint64 actualUnlock   = tentativeUnlock - bridgeFee;
         if (actualUnlock < MIN_UNLOCK_SOMPI) revert BelowMinimum();
 

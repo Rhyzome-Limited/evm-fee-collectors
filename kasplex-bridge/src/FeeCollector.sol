@@ -21,12 +21,14 @@ contract FeeCollector {
 
     // ─── State ───────────────────────────────────────────────────────────────
     address public owner;
+    address public pendingOwner;
     address public withdrawer;
     uint256 public feeRate; // basis points (e.g. 75 = 0.75%)
     IKasplexBridge public immutable bridge;
 
     // ─── Events ──────────────────────────────────────────────────────────────
     event OwnerSet(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferProposed(address indexed currentOwner, address indexed proposedOwner);
     event WithdrawerSet(address indexed previousWithdrawer, address indexed newWithdrawer);
     event FeeRateSet(uint256 previousFeeRate, uint256 newFeeRate);
     event FeeCollected(address indexed from, uint256 feeAmount);
@@ -34,6 +36,7 @@ contract FeeCollector {
 
     // ─── Errors ──────────────────────────────────────────────────────────────
     error NotOwner();
+    error NotPendingOwner();
     error NotWithdrawer();
     error ZeroAddress();
     error FeeRateTooHigh();
@@ -41,6 +44,7 @@ contract FeeCollector {
     error InsufficientValue();
     error InsufficientBalance();
     error BridgeFailed();
+    error InvalidAddress();
 
     // ─── Modifiers ───────────────────────────────────────────────────────────
     modifier onlyOwner() {
@@ -76,10 +80,17 @@ contract FeeCollector {
 
     // ─── Admin setters ───────────────────────────────────────────────────────
 
-    function setOwner(address _newOwner) external onlyOwner {
+    function transferOwnership(address _newOwner) external onlyOwner {
         if (_newOwner == address(0)) revert ZeroAddress();
-        emit OwnerSet(owner, _newOwner);
-        owner = _newOwner;
+        pendingOwner = _newOwner;
+        emit OwnershipTransferProposed(owner, _newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnerSet(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
     }
 
     function setWithdrawer(address _newWithdrawer) external onlyOwner {
@@ -110,6 +121,13 @@ contract FeeCollector {
     function bridgeToL1(string calldata l1Recipient) external payable {
         if (msg.value == 0) revert InsufficientValue();
 
+        // Validate Kaspa address: non-empty, starts with "kaspa:", max 90 bytes
+        bytes memory addrBytes = bytes(l1Recipient);
+        if (addrBytes.length < 7 || addrBytes.length > 90) revert InvalidAddress();
+        if (
+            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" ||
+            addrBytes[3] != "p" || addrBytes[4] != "a" || addrBytes[5] != ":"
+        ) revert InvalidAddress();
         uint256 fee = (msg.value * feeRate) / FEE_DENOMINATOR;
         uint256 netValue = msg.value - fee;
 

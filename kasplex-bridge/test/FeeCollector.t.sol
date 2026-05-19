@@ -74,25 +74,36 @@ contract FeeCollectorTest is Test {
         new FeeCollector(owner, withdrawer, 1_001, address(mockBridge));
     }
 
-    // ─── setOwner ─────────────────────────────────────────────────────────────
+    // ─── transferOwnership / acceptOwnership ──────────────────────────────────
 
-    function test_setOwner() public {
+    function test_transferOwnership() public {
         address newOwner = makeAddr("newOwner");
         vm.prank(owner);
-        fc.setOwner(newOwner);
+        fc.transferOwnership(newOwner);
+        assertEq(fc.owner(), owner);
+        assertEq(fc.pendingOwner(), newOwner);
+        vm.prank(newOwner);
+        fc.acceptOwnership();
         assertEq(fc.owner(), newOwner);
+        assertEq(fc.pendingOwner(), address(0));
     }
 
-    function test_setOwner_revertNotOwner() public {
+    function test_transferOwnership_revertNotOwner() public {
         vm.prank(stranger);
         vm.expectRevert(FeeCollector.NotOwner.selector);
-        fc.setOwner(stranger);
+        fc.transferOwnership(stranger);
     }
 
-    function test_setOwner_revertZeroAddress() public {
+    function test_transferOwnership_revertZeroAddress() public {
         vm.prank(owner);
         vm.expectRevert(FeeCollector.ZeroAddress.selector);
-        fc.setOwner(address(0));
+        fc.transferOwnership(address(0));
+    }
+
+    function test_acceptOwnership_revertNotPending() public {
+        vm.prank(stranger);
+        vm.expectRevert(FeeCollector.NotPendingOwner.selector);
+        fc.acceptOwnership();
     }
 
     // ─── setWithdrawer ────────────────────────────────────────────────────────
@@ -216,6 +227,25 @@ contract FeeCollectorTest is Test {
         vm.prank(user);
         vm.expectRevert(FeeCollector.BridgeFailed.selector);
         fc.bridgeToL1{value: 5 ether}(L1_ADDR);
+    }
+
+    function test_bridgeToL1_revertInvalidAddress_empty() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InvalidAddress.selector);
+        fc.bridgeToL1{value: 5 ether}("");
+    }
+
+    function test_bridgeToL1_revertInvalidAddress_noPrefix() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InvalidAddress.selector);
+        fc.bridgeToL1{value: 5 ether}("qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3k");
+    }
+
+    function test_bridgeToL1_revertInvalidAddress_tooLong() public {
+        vm.prank(user);
+        vm.expectRevert(FeeCollector.InvalidAddress.selector);
+        // 91 bytes — exceeds max of 90
+        fc.bridgeToL1{value: 5 ether}("kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf22222222222222222222222");
     }
 
     function testFuzz_bridgeToL1(uint256 kasIn) public {

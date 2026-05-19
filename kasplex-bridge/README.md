@@ -32,7 +32,7 @@ kasplex-bridge/
 ├── src/
 │   └── FeeCollector.sol    # Main contract
 ├── test/
-│   └── FeeCollector.t.sol  # Forge test suite (30 tests)
+│   └── FeeCollector.t.sol  # Forge test suite (34 tests)
 ├── script/
 │   └── DeployFeeCollector.s.sol
 ├── lib/
@@ -98,7 +98,8 @@ forge create src/FeeCollector.sol:FeeCollector \
 
 | Function | Description |
 |---|---|
-| `setOwner(address)` | Transfer ownership. |
+| `transferOwnership(address)` | Propose new owner (two-step). |
+| `acceptOwnership()` | New owner accepts transfer. |
 | `setWithdrawer(address)` | Change fee withdrawer. |
 | `setFeeRate(uint256)` | Set fee in basis points (max 1000 = 10%). |
 
@@ -120,6 +121,13 @@ Example: bridging 100 KAS at default 0.75%
 - Fee: 0.75 KAS (stays in FeeCollector)
 - Forwarded to bridge: 99.25 KAS
 
+## Kaspa Address Requirements
+
+- Must start with `kaspa:`
+- Max 90 bytes total
+- Main-net addresses are exactly 69 characters
+- No checksum validation — double-check your address before bridging
+
 ## Payload Encoding
 
 The Kasplex Bridge expects the L1 address encoded as a UTF-8 hex string.  
@@ -129,68 +137,24 @@ This contract handles encoding internally — pass the plain Kaspa address:
 "kaspa:qypr0qj7..." → "6b61737061 3a 7179 7072..."
 ```
 
+## Errors
+
+| Error | Cause |
+|---|---|
+| `InsufficientValue` | `msg.value == 0` |
+| `InvalidAddress` | Kaspa address malformed or out of length range |
+| `BridgeFailed` | Bridge `lockForBridge` returned false |
+| `FeeRateTooHigh` | Attempted fee rate > 1000 bps |
+| `ZeroAddress` | Zero address passed to a setter |
+| `NotOwner` / `NotWithdrawer` | Caller not authorized |
+
 ## Events
 
 | Event | When |
 |---|---|
 | `FeeCollected(address indexed from, uint256 feeAmount)` | Fee charged on bridge |
 | `NativeWithdrawn(address indexed to, uint256 amount)` | Fee withdrawal |
-| `OwnerSet(address indexed prev, address indexed next)` | Owner changed |
+| `OwnerSet(address indexed prev, address indexed next)` | Ownership transferred |
+| `OwnershipTransferProposed(address indexed current, address indexed proposed)` | Ownership transfer proposed |
 | `WithdrawerSet(address indexed prev, address indexed next)` | Withdrawer changed |
 | `FeeRateSet(uint256 prev, uint256 next)` | Fee rate changed |
-
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```

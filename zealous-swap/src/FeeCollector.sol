@@ -55,12 +55,14 @@ contract FeeCollector {
 
     // ─── State ───────────────────────────────────────────────────────────────
     address public owner;
+    address public pendingOwner;
     address public withdrawer;
     uint256 public feeRate; // basis points (e.g. 75 = 0.75%)
     IZealousSwapRouter public immutable router;
 
     // ─── Events ──────────────────────────────────────────────────────────────
     event OwnerSet(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferProposed(address indexed currentOwner, address indexed proposedOwner);
     event WithdrawerSet(address indexed previousWithdrawer, address indexed newWithdrawer);
     event FeeRateSet(uint256 previousFeeRate, uint256 newFeeRate);
     event FeeCollected(address indexed token, address indexed from, uint256 feeAmount);
@@ -69,6 +71,7 @@ contract FeeCollector {
 
     // ─── Errors ──────────────────────────────────────────────────────────────
     error NotOwner();
+    error NotPendingOwner();
     error NotWithdrawer();
     error ZeroAddress();
     error FeeRateTooHigh();
@@ -110,10 +113,17 @@ contract FeeCollector {
 
     // ─── Admin setters ───────────────────────────────────────────────────────
 
-    function setOwner(address _newOwner) external onlyOwner {
+    function transferOwnership(address _newOwner) external onlyOwner {
         if (_newOwner == address(0)) revert ZeroAddress();
-        emit OwnerSet(owner, _newOwner);
-        owner = _newOwner;
+        pendingOwner = _newOwner;
+        emit OwnershipTransferProposed(owner, _newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnerSet(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
     }
 
     function setWithdrawer(address _newWithdrawer) external onlyOwner {
@@ -139,23 +149,46 @@ contract FeeCollector {
 
     // ─── Internal helpers ────────────────────────────────────────────────────
 
+    /// @dev Low-level approve that handles both bool-returning and void-returning
+    ///      (e.g. USDT) ERC-20 tokens. Reverts if the call fails or returns false.
+    function _safeApprove(address token, address spender, uint256 amount) internal {
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
+        if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    }
+
+    /// @dev Low-level transfer that handles both bool-returning and void-returning
+    ///      (e.g. USDT) ERC-20 tokens. Reverts if the call fails or returns false.
+    function _safeTransfer(address token, address to, uint256 amount) internal {
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+        if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    }
+
+    /// @dev Low-level transferFrom that handles both bool-returning and void-returning
+    ///      (e.g. USDT) ERC-20 tokens. Reverts if the call fails or returns false.
+    function _safeTransferFrom(address token, address from, address to, uint256 amount) internal {
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(0x23b872dd, from, to, amount));
+        if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    }
+
     function _takeFee(address token, address from, uint256 amount)
         internal
         returns (uint256 netAmount)
     {
         // Pull full amount from caller
-        bool ok = IERC20(token).transferFrom(from, address(this), amount);
-        if (!ok) revert TransferFailed();
+        _safeTransferFrom(token, from, address(this), amount);
 
         uint256 fee = (amount * feeRate) / FEE_DENOMINATOR;
         netAmount = amount - fee;
 
         if (fee > 0) emit FeeCollected(token, from, fee);
 
-        // Reset to 0 first to support tokens (e.g. USDT) that require allowance
-        // to be zero before setting a new value, then approve the net amount.
-        IERC20(token).approve(address(router), 0);
-        IERC20(token).approve(address(router), netAmount);
+        // Reset to 0 first (USDT-compatibility), then approve net amount.
+        // Uses low-level call to handle both bool-returning and void-returning tokens.
+        _safeApprove(token, address(router), 0);
+        _safeApprove(token, address(router), netAmount);
     }
 
     // ─── Swap wrappers ───────────────────────────────────────────────────────
@@ -172,6 +205,7 @@ contract FeeCollector {
         if (path.length < 2) revert InvalidPath();
         uint256 netAmountIn = _takeFee(path[0], msg.sender, amountIn);
         amounts = router.swapExactTokensForTokens(netAmountIn, amountOutMin, path, to, deadline);
+        _safeApprove(path[0], address(router), 0);
     }
 
     /// @notice Swap exact `amountIn` of token → KAS via Zealous Swap.
@@ -185,6 +219,7 @@ contract FeeCollector {
         if (path.length < 2) revert InvalidPath();
         uint256 netAmountIn = _takeFee(path[0], msg.sender, amountIn);
         amounts = router.swapExactTokensForKAS(netAmountIn, amountOutMin, path, to, deadline);
+        _safeApprove(path[0], address(router), 0);
     }
 
     /// @notice Swap KAS → tokens via Zealous Swap. Fee is deducted from msg.value.
@@ -195,6 +230,7 @@ contract FeeCollector {
         uint256 deadline
     ) external payable returns (uint256[] memory amounts) {
         if (path.length < 2) revert InvalidPath();
+        if (path[0] != router.WKAS()) revert InvalidPath();
         uint256 fee = (msg.value * feeRate) / FEE_DENOMINATOR;
         uint256 netValue = msg.value - fee;
 
@@ -220,8 +256,7 @@ contract FeeCollector {
     function withdraw(address token, address to, uint256 amount) external onlyWithdrawer {
         if (to == address(0)) revert ZeroAddress();
         if (amount > IERC20(token).balanceOf(address(this))) revert InsufficientBalance();
-        bool ok = IERC20(token).transfer(to, amount);
-        if (!ok) revert TransferFailed();
+        _safeTransfer(token, to, amount);
         emit Withdrawn(token, to, amount);
     }
 
@@ -229,8 +264,7 @@ contract FeeCollector {
         if (to == address(0)) revert ZeroAddress();
         uint256 bal = IERC20(token).balanceOf(address(this));
         if (bal == 0) revert InsufficientBalance();
-        bool ok = IERC20(token).transfer(to, bal);
-        if (!ok) revert TransferFailed();
+        _safeTransfer(token, to, bal);
         emit Withdrawn(token, to, bal);
     }
 
@@ -240,6 +274,15 @@ contract FeeCollector {
         (bool ok,) = to.call{value: amount}("");
         if (!ok) revert TransferFailed();
         emit NativeWithdrawn(to, amount);
+    }
+
+    function withdrawAllNative(address payable to) external onlyWithdrawer {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 bal = address(this).balance;
+        if (bal == 0) revert InsufficientBalance();
+        (bool ok,) = to.call{value: bal}("");
+        if (!ok) revert TransferFailed();
+        emit NativeWithdrawn(to, bal);
     }
 
     // ─── Receive native token ────────────────────────────────────────────────
