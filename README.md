@@ -7,7 +7,8 @@ Mono-repo for EVM fee collector contracts, one per DEX integration.
 | Directory | DEX / Protocol | Description |
 |-----------|----------------|-------------|
 | [`zealous-swap/`](./zealous-swap/) | Zealous Swap | Wraps the Zealous Swap Router and charges a configurable fee on every swap |
-| [`kasplex-bridge/`](./kasplex-bridge/) | Kasplex Bridge | Wraps the Kasplex Bridge `lockForBridge` and charges a configurable fee on every L2 → L1 bridge |
+| [`kasplex-bridge/`](./kasplex-bridge/) | Kasplex Bridge | Wraps `lockForBridge`, charges fee on every L2→L1 KAS bridge transaction |
+| [`igra-bridge/`](./igra-bridge/) | Igra KasExitBridge | Wraps `requestExit`, charges fee on every iKAS→KAS exit (min 1,000 KAS) |
 
 ## Structure
 
@@ -18,7 +19,11 @@ evm-fee-collectors/
 │   ├── test/            # Forge tests
 │   ├── script/          # Deploy scripts
 │   └── docs/            # Integration & deployment guides
-└── kasplex-bridge/      # Kasplex Bridge fee collector (Foundry project)
+├── kasplex-bridge/      # Kasplex Bridge fee collector (Foundry project)
+│   ├── src/             # Contracts
+│   ├── test/            # Forge tests
+│   └── script/          # Deploy scripts
+└── igra-bridge/         # Igra KasExitBridge fee collector (Foundry project)
     ├── src/             # Contracts
     ├── test/            # Forge tests
     └── script/          # Deploy scripts
