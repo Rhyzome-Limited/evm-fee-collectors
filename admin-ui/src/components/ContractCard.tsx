@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import useSWR from 'swr'
 import {
   useReadContracts,
   useBalance,
@@ -47,6 +48,28 @@ function shorten(addr: string) {
 function eq(a?: string, b?: string) {
   if (!a || !b) return false
   return a.toLowerCase() === b.toLowerCase()
+}
+
+// ─── Blockscout token-balances hook ─────────────────────────────────────────
+interface BlockscoutToken {
+  token: { address: `0x${string}`; symbol: string; decimals: string }
+  value: string
+}
+
+const fetchTokenBalances = async (url: string): Promise<`0x${string}`[]> => {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('fetch failed')
+  const data: BlockscoutToken[] = await res.json()
+  return data.filter((t) => BigInt(t.value) > 0n).map((t) => t.token.address)
+}
+
+function useBlockscoutTokens(explorerUrl: string, contractAddr: `0x${string}`, enabled: boolean) {
+  const key = enabled ? `${explorerUrl}/api/v2/addresses/${contractAddr}/token-balances` : null
+  const { data, isLoading, mutate } = useSWR(key, fetchTokenBalances, {
+    refreshInterval: 30_000,
+    revalidateOnFocus: false,
+  })
+  return { tokens: data ?? [], loading: isLoading, refetch: mutate }
 }
 
 // ─── TokenRow ─────────────────────────────────────────────────────────────────
@@ -180,7 +203,8 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
   const [ownerInput, setOwnerInput] = useState('')
   const [tokenInput, setTokenInput] = useState('')
 
-  const [watchedTokens, setWatchedTokens] = useState<`0x${string}`[]>(() => {
+  // manually-pinned tokens (persisted)
+  const [pinnedTokens, setPinnedTokens] = useState<`0x${string}`[]>(() => {
     try {
       const saved = localStorage.getItem(`tokens_${contract.address}`)
       return saved ? (JSON.parse(saved) as `0x${string}`[]) : []
@@ -188,6 +212,19 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
       return []
     }
   })
+
+  // auto-fetched from Blockscout
+  const isDeployedContract = contract.address !== ZERO
+  const { tokens: explorerTokens, loading: explorerLoading, refetch: refetchExplorerTokens } =
+    useBlockscoutTokens(contract.explorerUrl, contract.address, contract.type === 'swap' && isDeployedContract)
+
+  // merge: explorer tokens + pinned extras (deduped)
+  const allTokens = [
+    ...explorerTokens,
+    ...pinnedTokens.filter(
+      (p) => !explorerTokens.some((e) => e.toLowerCase() === p.toLowerCase())
+    ),
+  ] as `0x${string}`[]
 
   // ── Tx state ────────────────────────────────────────────────────────────────
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
@@ -222,6 +259,7 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
     if (isConfirmed) {
       void refetch()
       void refetchBal()
+      void refetchExplorerTokens()
       const t = setTimeout(() => {
         setTxHash(undefined)
         setPendingLabel('')
@@ -264,16 +302,16 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
   const addToken = () => {
     if (!isAddress(tokenInput)) return
     const addr = tokenInput as `0x${string}`
-    if (watchedTokens.some((t) => t.toLowerCase() === addr.toLowerCase())) return
-    const next = [...watchedTokens, addr]
-    setWatchedTokens(next)
+    if (allTokens.some((t) => t.toLowerCase() === addr.toLowerCase())) return
+    const next = [...pinnedTokens, addr]
+    setPinnedTokens(next)
     localStorage.setItem(`tokens_${contract.address}`, JSON.stringify(next))
     setTokenInput('')
   }
 
-  const removeToken = (addr: `0x${string}`) => {
-    const next = watchedTokens.filter((t) => t.toLowerCase() !== addr.toLowerCase())
-    setWatchedTokens(next)
+  const removePinned = (addr: `0x${string}`) => {
+    const next = pinnedTokens.filter((t) => t.toLowerCase() !== addr.toLowerCase())
+    setPinnedTokens(next)
     localStorage.setItem(`tokens_${contract.address}`, JSON.stringify(next))
   }
 
@@ -399,13 +437,27 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
           {contract.type === 'swap' && (
             <div className="px-5 py-4">
               <div className="flex items-center justify-between gap-3 mb-3">
-                <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">
-                  Token Balances
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+                    Token Balances
+                  </p>
+                  {explorerLoading && (
+                    <span className="text-xs text-gray-600">loading…</span>
+                  )}
+                  {!explorerLoading && (
+                    <button
+                      onClick={() => void refetchExplorerTokens()}
+                      className="text-gray-600 hover:text-gray-400 text-xs transition-colors"
+                      title="Refresh from explorer"
+                    >
+                      ↻
+                    </button>
+                  )}
+                </div>
                 <div className="flex gap-1.5">
                   <input
                     type="text"
-                    placeholder="0x… token address"
+                    placeholder="0x… pin extra token"
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && addToken()}
@@ -416,48 +468,56 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
                     disabled={!isAddress(tokenInput)}
                     className="px-2 py-1 text-xs rounded bg-blue-900 hover:bg-blue-800 disabled:opacity-40 transition-colors"
                   >
-                    + Add
+                    + Pin
                   </button>
                 </div>
               </div>
 
-              {watchedTokens.length === 0 ? (
+              {allTokens.length === 0 && !explorerLoading ? (
                 <p className="text-xs text-gray-600 italic">
-                  No tokens tracked. Paste a token contract address above.
+                  No tokens found. Contract may have no ERC-20 balance, or pin one manually.
                 </p>
               ) : (
                 <div>
-                  {watchedTokens.map((t) => (
-                    <div key={t} className="flex items-center gap-1">
-                      <div className="flex-1 min-w-0">
-                        <TokenRow
-                          tokenAddr={t}
-                          contractAddr={contract.address}
-                          chainId={contract.chainId}
-                          canWithdraw={canWithdraw && !isWrongChain}
-                          onWithdrawAll={(addr) =>
-                            execute('Withdraw Token', () =>
-                              writeContractAsync({
-                                address: contract.address,
-                                abi: feeCollectorAbi,
-                                functionName: 'withdrawAll',
-                                args: [addr, userAddr!],
-                                chainId: contract.chainId,
-                              }),
-                            )
-                          }
-                          disabled={isBusy}
-                        />
+                  {allTokens.map((t) => {
+                    const isPinned = pinnedTokens.some((p) => p.toLowerCase() === t.toLowerCase())
+                    const isFromExplorer = explorerTokens.some((e) => e.toLowerCase() === t.toLowerCase())
+                    return (
+                      <div key={t} className="flex items-center gap-1">
+                        <div className="flex-1 min-w-0">
+                          <TokenRow
+                            tokenAddr={t}
+                            contractAddr={contract.address}
+                            chainId={contract.chainId}
+                            canWithdraw={canWithdraw && !isWrongChain}
+                            onWithdrawAll={(addr) =>
+                              execute('Withdraw Token', () =>
+                                writeContractAsync({
+                                  address: contract.address,
+                                  abi: feeCollectorAbi,
+                                  functionName: 'withdrawAll',
+                                  args: [addr, userAddr!],
+                                  chainId: contract.chainId,
+                                }),
+                              )
+                            }
+                            disabled={isBusy}
+                          />
+                        </div>
+                        {isFromExplorer && !isPinned ? (
+                          <span className="text-gray-700 text-xs px-1" title="From explorer">●</span>
+                        ) : (
+                          <button
+                            onClick={() => removePinned(t)}
+                            className="text-gray-700 hover:text-red-500 text-xs px-1 transition-colors"
+                            title="Remove pinned token"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
-                      <button
-                        onClick={() => removeToken(t)}
-                        className="text-gray-700 hover:text-red-500 text-xs px-1 transition-colors"
-                        title="Remove token"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>

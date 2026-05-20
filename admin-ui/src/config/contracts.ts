@@ -15,7 +15,7 @@ export interface ContractConfig {
 export const CONTRACTS: ContractConfig[] = [
   {
     label: "Kasplex Bridge",
-    address: "0x0000000000000000000000000000000000000000", // TODO
+    address: "0xaD5c913a6CDbFbEF88f9f7b4e15cA5FCF75cB295",
     chainId: kasplexMainnet.id,
     type: "bridge",
     symbol: "KAS",
@@ -23,7 +23,7 @@ export const CONTRACTS: ContractConfig[] = [
   },
   {
     label: "Igra Bridge",
-    address: "0x0000000000000000000000000000000000000000", // TODO
+    address: "0xaD5c913a6CDbFbEF88f9f7b4e15cA5FCF75cB295",
     chainId: igraMainnet.id,
     type: "bridge",
     symbol: "iKAS",
@@ -31,7 +31,7 @@ export const CONTRACTS: ContractConfig[] = [
   },
   {
     label: "Zealous Swap (Kasplex)",
-    address: "0x0000000000000000000000000000000000000000", // TODO
+    address: "0x1E7dbA18ca3c7C5fa7C7104a5E5CFe50fD73cc42",
     chainId: kasplexMainnet.id,
     type: "swap",
     symbol: "KAS",
@@ -39,7 +39,7 @@ export const CONTRACTS: ContractConfig[] = [
   },
   {
     label: "Zealous Swap (IGRA)",
-    address: "0x0000000000000000000000000000000000000000", // TODO
+    address: "0x1E7dbA18ca3c7C5fa7C7104a5E5CFe50fD73cc42",
     chainId: igraMainnet.id,
     type: "swap",
     symbol: "iKAS",
