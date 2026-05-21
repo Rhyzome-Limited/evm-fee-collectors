@@ -410,7 +410,16 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <p className="text-xs text-gray-500 mb-0.5">Native Balance</p>
-                <p className="text-white font-medium">{nativeFmt}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-white font-medium">{nativeFmt}</p>
+                  <button
+                    onClick={() => void refetchBal()}
+                    title="Refresh native balance"
+                    className="text-gray-600 hover:text-gray-300 transition-colors leading-none"
+                  >
+                    ↻
+                  </button>
+                </div>
               </div>
               <div className="flex gap-2">
                 {isWrongChain ? (
