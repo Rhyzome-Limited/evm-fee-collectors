@@ -52,23 +52,25 @@ function eq(a?: string, b?: string) {
 
 // ─── Blockscout token-balances hook ─────────────────────────────────────────
 interface BlockscoutToken {
-  token: { address: `0x${string}`; symbol: string; decimals: string }
+  token: { address_hash: `0x${string}`; symbol: string; decimals: string }
   value: string
 }
 
 const fetchTokenBalances = async (url: string): Promise<`0x${string}`[]> => {
   const res = await fetch(url)
   if (!res.ok) throw new Error('fetch failed')
-  const data: BlockscoutToken[] = await res.json()
-  return data.filter((t) => BigInt(t.value) > 0n).map((t) => t.token.address)
+  const data: { items: BlockscoutToken[] } = await res.json()
+  return (data.items ?? []).filter((t) => BigInt(t.value) > 0n).map((t) => t.token.address_hash)
 }
 
-function useBlockscoutTokens(explorerUrl: string, contractAddr: `0x${string}`, enabled: boolean) {
-  const key = enabled ? `${explorerUrl}/api/v2/addresses/${contractAddr}/token-balances` : null
+function useBlockscoutTokens(apiUrl: string, contractAddr: `0x${string}`, enabled: boolean) {
+  const key = enabled ? `${apiUrl}/api/v2/addresses/${contractAddr}/tokens` : null
+  
   const { data, isLoading, mutate } = useSWR(key, fetchTokenBalances, {
     refreshInterval: 30_000,
     revalidateOnFocus: false,
   })
+
   return { tokens: data ?? [], loading: isLoading, refetch: mutate }
 }
 
@@ -80,6 +82,7 @@ function TokenRow({
   canWithdraw,
   onWithdrawAll,
   disabled,
+  refreshKey,
 }: {
   tokenAddr: `0x${string}`
   contractAddr: `0x${string}`
@@ -87,8 +90,9 @@ function TokenRow({
   canWithdraw: boolean
   onWithdrawAll: (t: `0x${string}`) => void
   disabled: boolean
+  refreshKey?: number
 }) {
-  const { data } = useReadContracts({
+  const { data, refetch } = useReadContracts({
     contracts: [
       { address: tokenAddr, abi: erc20Abi, functionName: 'symbol', chainId },
       { address: tokenAddr, abi: erc20Abi, functionName: 'decimals', chainId },
@@ -100,7 +104,13 @@ function TokenRow({
         chainId,
       },
     ],
+    query: { refetchInterval: 30_000 },
   })
+
+  useEffect(() => {
+    if (refreshKey !== undefined) void refetch()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey])
 
   const symbol = (data?.[0].result as string | undefined) ?? '???'
   const decimals = (data?.[1].result as number | undefined) ?? 18
@@ -216,7 +226,7 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
   // auto-fetched from Blockscout
   const isDeployedContract = contract.address !== ZERO
   const { tokens: explorerTokens, loading: explorerLoading, refetch: refetchExplorerTokens } =
-    useBlockscoutTokens(contract.explorerUrl, contract.address, contract.type === 'swap' && isDeployedContract)
+    useBlockscoutTokens(contract.apiUrl, contract.address, contract.type === 'swap' && isDeployedContract)
 
   // merge: explorer tokens + pinned extras (deduped)
   const allTokens = [
@@ -230,6 +240,7 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
   const [pendingLabel, setPendingLabel] = useState('')
   const [txError, setTxError] = useState('')
+  const [confirmCount, setConfirmCount] = useState(0)
 
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
     useWaitForTransactionReceipt({ hash: txHash })
@@ -260,6 +271,7 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
       void refetch()
       void refetchBal()
       void refetchExplorerTokens()
+      setConfirmCount((n) => n + 1)
       const t = setTimeout(() => {
         setTxHash(undefined)
         setPendingLabel('')
@@ -490,6 +502,7 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
                             contractAddr={contract.address}
                             chainId={contract.chainId}
                             canWithdraw={canWithdraw && !isWrongChain}
+                            refreshKey={confirmCount}
                             onWithdrawAll={(addr) =>
                               execute('Withdraw Token', () =>
                                 writeContractAsync({

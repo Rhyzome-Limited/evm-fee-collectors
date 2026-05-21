@@ -4,6 +4,4 @@
 [submodule "kasplex-bridge/lib/forge-std"]
 	path = kasplex-bridge/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
-[submodule "igra-bridge/lib/forge-std"]
-	path = igra-bridge/lib/forge-std
-	url = https://github.com/foundry-rs/forge-std
+
