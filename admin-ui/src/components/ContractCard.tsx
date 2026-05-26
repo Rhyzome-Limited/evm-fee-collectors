@@ -226,7 +226,7 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
   // auto-fetched from Blockscout
   const isDeployedContract = contract.address !== ZERO
   const { tokens: explorerTokens, loading: explorerLoading, refetch: refetchExplorerTokens } =
-    useBlockscoutTokens(contract.apiUrl, contract.address, contract.type === 'swap' && isDeployedContract)
+    useBlockscoutTokens(contract.apiUrl, contract.address, (contract.type === 'swap' || contract.type === 'krc20-evm-bridge') && isDeployedContract)
 
   // merge: explorer tokens + pinned extras (deduped)
   const allTokens = [
@@ -454,8 +454,8 @@ export function ContractCard({ contract }: { contract: ContractConfig }) {
             </div>
           </div>
 
-          {/* ── Token Balances (swap only) ── */}
-          {contract.type === 'swap' && (
+          {/* ── Token Balances (swap + krc20-evm-bridge) ── */}
+          {(contract.type === 'swap' || contract.type === 'krc20-evm-bridge') && (
             <div className="px-5 py-4">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div className="flex items-center gap-2">

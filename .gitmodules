@@ -5,3 +5,9 @@
 	path = kasplex-bridge/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
 
+[submodule "kat-igra-bridge/lib/forge-std"]
+	path = kat-igra-bridge/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "kat-igra-krc20/lib/forge-std"]
+	path = kat-igra-krc20/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

@@ -1,6 +1,6 @@
 import { kasplexMainnet, igraMainnet } from "./chains";
 
-export type ContractType = "bridge" | "swap";
+export type ContractType = "bridge" | "swap" | "krc20-evm-bridge";
 
 export interface ContractConfig {
   label: string;
@@ -31,6 +31,33 @@ export const CONTRACTS: ContractConfig[] = [
     symbol: "KAS",
     explorerUrl: kasplexMainnet.blockExplorers.default.url,
     apiUrl: kasplexMainnet.apiUrl,
+  },
+  {
+    label: "KAT KRC-20 Bridge (Kasplex)",
+    address: "0x642638cF9D656378b679DE02FAbCc5e4E7F1F915",
+    chainId: kasplexMainnet.id,
+    type: "krc20-evm-bridge",
+    symbol: "KAS",
+    explorerUrl: kasplexMainnet.blockExplorers.default.url,
+    apiUrl: kasplexMainnet.apiUrl,
+  },
+  {
+    label: "KAT Igra Bridge",
+    address: "0x9d01E8a2f3DD0B1Fc739d32ca8d79509b501eAb8",
+    chainId: igraMainnet.id,
+    type: "bridge",
+    symbol: "iKAS",
+    explorerUrl: igraMainnet.blockExplorers.default.url,
+    apiUrl: igraMainnet.apiUrl,
+  },
+  {
+    label: "KAT Igra KRC-20 Bridge",
+    address: "0x642638cF9D656378b679DE02FAbCc5e4E7F1F915",
+    chainId: igraMainnet.id,
+    type: "krc20-evm-bridge",
+    symbol: "iKAS",
+    explorerUrl: igraMainnet.blockExplorers.default.url,
+    apiUrl: igraMainnet.apiUrl,
   },
   {
     label: "Zealous Swap (IGRA)",

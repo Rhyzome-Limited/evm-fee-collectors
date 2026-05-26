@@ -9,6 +9,8 @@ Mono-repo for EVM fee collector contracts, one per DEX integration.
 | [`zealous-swap/`](./zealous-swap/) | Zealous Swap | Wraps the Zealous Swap Router and charges a configurable fee on every swap |
 | [`kasplex-bridge/`](./kasplex-bridge/) | Kasplex Bridge | Wraps `lockForBridge`, charges fee on every L2→L1 KAS bridge transaction |
 | [`igra-bridge/`](./igra-bridge/) | Igra KasExitBridge | Wraps `requestExit`, charges fee on every iKAS→KAS exit (min 1,000 KAS) |
+| [`kat-igra-bridge/`](./kat-igra-bridge/) | KAT Igra Bridge (KasBridge) | Wraps `lockForExit`, charges fee on every iKAS→KAS exit via the KAT custodial bridge |
+| [`kat-igra-krc20/`](./kat-igra-krc20/) | KAT Igra KRC-20 Bridge | Wraps `burnForBridgeBack`, charges fee on every ERC-20→KRC-20 withdrawal |
 
 ## Structure
 
@@ -23,7 +25,15 @@ evm-fee-collectors/
 │   ├── src/             # Contracts
 │   ├── test/            # Forge tests
 │   └── script/          # Deploy scripts
-└── igra-bridge/         # Igra KasExitBridge fee collector (Foundry project)
+├── igra-bridge/         # Igra KasExitBridge fee collector (Foundry project)
+│   ├── src/             # Contracts
+│   ├── test/            # Forge tests
+│   └── script/          # Deploy scripts
+├── kat-igra-bridge/     # KAT Igra Bridge fee collector (Foundry project)
+│   ├── src/             # Contracts
+│   ├── test/            # Forge tests
+│   └── script/          # Deploy scripts
+└── kat-igra-krc20/      # KAT Igra KRC-20 Bridge fee collector (Foundry project)
     ├── src/             # Contracts
     ├── test/            # Forge tests
     └── script/          # Deploy scripts

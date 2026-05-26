@@ -2,6 +2,12 @@ import { useAccount } from 'wagmi'
 import { Header } from './components/Header'
 import { ContractCard } from './components/ContractCard'
 import { CONTRACTS } from './config/contracts'
+import { kasplexMainnet, igraMainnet } from './config/chains'
+
+const NETWORKS = [
+  { id: kasplexMainnet.id, name: 'Kasplex zkEVM' },
+  { id: igraMainnet.id, name: 'IGRA Mainnet' },
+]
 
 export default function App() {
   const { isConnected } = useAccount()
@@ -17,13 +23,26 @@ export default function App() {
             <p className="text-gray-400">Connect your wallet to manage fee collector contracts.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {CONTRACTS.map((contract) => (
-              <ContractCard
-                key={`${contract.chainId}_${contract.address}`}
-                contract={contract}
-              />
-            ))}
+          <div className="space-y-10">
+            {NETWORKS.map((network) => {
+              const contracts = CONTRACTS.filter((c) => c.chainId === network.id)
+              if (contracts.length === 0) return null
+              return (
+                <section key={network.id}>
+                  <h2 className="text-lg font-semibold text-gray-300 mb-4 border-b border-gray-800 pb-2">
+                    {network.name}
+                  </h2>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {contracts.map((contract) => (
+                      <ContractCard
+                        key={`${contract.chainId}_${contract.address}`}
+                        contract={contract}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )
+            })}
           </div>
         )}
       </main>
