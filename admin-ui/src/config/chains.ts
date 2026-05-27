@@ -13,7 +13,10 @@ export const kasplexMainnet = {
       },
     },
   }),
-  apiUrl: "https://api-explorer.kasplex.org",
+  // dev: vite proxy  prod: Cloudflare Worker
+  apiUrl: import.meta.env.VITE_PROXY_BASE
+    ? `${import.meta.env.VITE_PROXY_BASE}/proxy/kasplex-api`
+    : "/proxy/kasplex-api",
 };
 
 export const igraMainnet = {
@@ -26,7 +29,9 @@ export const igraMainnet = {
       default: { name: "IGRA Explorer", url: "https://explorer.igralabs.com" },
     },
   }),
-  apiUrl: "https://explorer.igralabs.com",
+  apiUrl: import.meta.env.VITE_PROXY_BASE
+    ? `${import.meta.env.VITE_PROXY_BASE}/proxy/igra-api`
+    : "/proxy/igra-api",
 };
 
 export const CHAIN_NAMES: Record<number, string> = {
