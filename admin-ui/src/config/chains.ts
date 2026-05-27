@@ -13,7 +13,7 @@ export const kasplexMainnet = {
       },
     },
   }),
-  apiUrl: "/proxy/kasplex-api",
+  apiUrl: "https://api-explorer.kasplex.org",
 };
 
 export const igraMainnet = {
@@ -26,7 +26,7 @@ export const igraMainnet = {
       default: { name: "IGRA Explorer", url: "https://explorer.igralabs.com" },
     },
   }),
-  apiUrl: "/proxy/igra-api",
+  apiUrl: "https://explorer.igralabs.com",
 };
 
 export const CHAIN_NAMES: Record<number, string> = {
