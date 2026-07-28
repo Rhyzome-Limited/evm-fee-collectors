@@ -1,6 +1,6 @@
 # Fee Collector — Deployed Contracts
 
-All contracts are deployed from the same deployer account, owner and withdrawer are set to `0xC9b501CDA88EE0f72f8b53430114729CcfA07eA1`.
+All contracts are deployed from the same deployer account `0xC9b501CDA88EE0f72f8b53430114729CcfA07eA1`. On-chain, all contracts have owner `0xbBA114b131c1ff6e0fEfaB1329eBFaAa5f306c94`, withdrawer `0x4be2c073c16494Abbe3489b953c198b393b1675A`, and feeRate 75 (0.75%).
 
 ---
 
