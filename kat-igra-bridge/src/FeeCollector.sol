@@ -129,8 +129,8 @@ contract FeeCollector {
         bytes memory addrBytes = bytes(kaspaAddress);
         if (addrBytes.length < 7 || addrBytes.length > 100) revert InvalidAddress();
         if (
-            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" ||
-            addrBytes[3] != "p" || addrBytes[4] != "a" || addrBytes[5] != ":"
+            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" || addrBytes[3] != "p"
+                || addrBytes[4] != "a" || addrBytes[5] != ":"
         ) revert InvalidAddress();
 
         uint256 fee = (msg.value * feeRate) / FEE_DENOMINATOR;

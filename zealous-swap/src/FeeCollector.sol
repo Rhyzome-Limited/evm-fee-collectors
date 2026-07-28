@@ -31,12 +31,10 @@ interface IZealousSwapRouter {
         uint256 deadline
     ) external returns (uint256[] memory amounts);
 
-    function swapExactKASForTokens(
-        uint256 amountOutMin,
-        address[] calldata path,
-        address to,
-        uint256 deadline
-    ) external payable returns (uint256[] memory amounts);
+    function swapExactKASForTokens(uint256 amountOutMin, address[] calldata path, address to, uint256 deadline)
+        external
+        payable
+        returns (uint256[] memory amounts);
 
     function getAmountsOut(uint256 amountIn, address[] calldata path, bool isDiscountEligible)
         external
@@ -152,31 +150,25 @@ contract FeeCollector {
     /// @dev Low-level approve that handles both bool-returning and void-returning
     ///      (e.g. USDT) ERC-20 tokens. Reverts if the call fails or returns false.
     function _safeApprove(address token, address spender, uint256 amount) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
         if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     /// @dev Low-level transfer that handles both bool-returning and void-returning
     ///      (e.g. USDT) ERC-20 tokens. Reverts if the call fails or returns false.
     function _safeTransfer(address token, address to, uint256 amount) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
         if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     /// @dev Low-level transferFrom that handles both bool-returning and void-returning
     ///      (e.g. USDT) ERC-20 tokens. Reverts if the call fails or returns false.
     function _safeTransferFrom(address token, address from, address to, uint256 amount) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(0x23b872dd, from, to, amount));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x23b872dd, from, to, amount));
         if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
-    function _takeFee(address token, address from, uint256 amount)
-        internal
-        returns (uint256 netAmount)
-    {
+    function _takeFee(address token, address from, uint256 amount) internal returns (uint256 netAmount) {
         // Pull full amount from caller
         _safeTransferFrom(token, from, address(this), amount);
 
@@ -223,12 +215,11 @@ contract FeeCollector {
     }
 
     /// @notice Swap KAS → tokens via Zealous Swap. Fee is deducted from msg.value.
-    function swapExactKASForTokens(
-        uint256 amountOutMin,
-        address[] calldata path,
-        address to,
-        uint256 deadline
-    ) external payable returns (uint256[] memory amounts) {
+    function swapExactKASForTokens(uint256 amountOutMin, address[] calldata path, address to, uint256 deadline)
+        external
+        payable
+        returns (uint256[] memory amounts)
+    {
         if (path.length < 2) revert InvalidPath();
         if (path[0] != router.WKAS()) revert InvalidPath();
         uint256 fee = (msg.value * feeRate) / FEE_DENOMINATOR;
@@ -236,8 +227,7 @@ contract FeeCollector {
 
         if (fee > 0) emit FeeCollected(address(0), msg.sender, fee);
 
-        amounts =
-            router.swapExactKASForTokens{value: netValue}(amountOutMin, path, to, deadline);
+        amounts = router.swapExactKASForTokens{value: netValue}(amountOutMin, path, to, deadline);
     }
 
     /// @notice Quote: how much output you get for `amountIn` after fee deduction.

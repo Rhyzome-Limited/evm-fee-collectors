@@ -19,9 +19,9 @@ import {FeeCollector} from "../src/FeeCollector.sol";
 ///     --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
 contract DeployFeeCollector is Script {
     function run() external {
-        address owner      = vm.envAddress("OWNER");
+        address owner = vm.envAddress("OWNER");
         address withdrawer = vm.envAddress("WITHDRAWER");
-        address router     = vm.envAddress("ROUTER");
+        address router = vm.envAddress("ROUTER");
 
         // FEE_PERCENT is percentage × 100 (basis points).
         // The contract stores this value and divides by 10000 on each swap.

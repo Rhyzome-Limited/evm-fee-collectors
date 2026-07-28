@@ -22,14 +22,14 @@ contract FeeCollectorTest is Test {
     FeeCollector public fc;
     MockBridge public mockBridge;
 
-    address owner      = makeAddr("owner");
+    address owner = makeAddr("owner");
     address withdrawer = makeAddr("withdrawer");
-    address user       = makeAddr("user");
-    address stranger   = makeAddr("stranger");
+    address user = makeAddr("user");
+    address stranger = makeAddr("stranger");
 
     uint256 constant DEFAULT_FEE_RATE = 75; // 0.75%
     uint256 constant FEE_DENOM = 10_000;
-    string  constant L1_ADDR = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
+    string constant L1_ADDR = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
 
     function setUp() public {
         mockBridge = new MockBridge();
@@ -229,7 +229,8 @@ contract FeeCollectorTest is Test {
 
     function test_bridgeToL1_maxLengthAddress() public {
         // exactly 100 bytes: "kaspa:" (6) + 94 'a' chars = 100
-        string memory addr100 = "kaspa:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        string memory addr100 =
+            "kaspa:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assertEq(bytes(addr100).length, 100);
         vm.prank(user);
         fc.bridgeToL1{value: 5 ether}(addr100);

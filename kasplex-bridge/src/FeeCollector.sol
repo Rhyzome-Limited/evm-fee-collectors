@@ -125,8 +125,8 @@ contract FeeCollector {
         bytes memory addrBytes = bytes(l1Recipient);
         if (addrBytes.length < 7 || addrBytes.length > 90) revert InvalidAddress();
         if (
-            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" ||
-            addrBytes[3] != "p" || addrBytes[4] != "a" || addrBytes[5] != ":"
+            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" || addrBytes[3] != "p"
+                || addrBytes[4] != "a" || addrBytes[5] != ":"
         ) revert InvalidAddress();
         uint256 fee = (msg.value * feeRate) / FEE_DENOMINATOR;
         uint256 netValue = msg.value - fee;
@@ -142,17 +142,13 @@ contract FeeCollector {
     /// @dev Converts the L1 recipient string to its UTF-8 hex representation,
     ///      matching the payload format expected by the Kasplex bridge.
     ///      e.g. "kaspa:q..." → "6b61737061..." (each byte → 2 hex chars)
-    function _encodePayload(string calldata l1Recipient)
-        internal
-        pure
-        returns (bytes memory)
-    {
+    function _encodePayload(string calldata l1Recipient) internal pure returns (bytes memory) {
         bytes memory src = bytes(l1Recipient);
         bytes memory encoded = new bytes(src.length * 2);
         bytes memory alphabet = "0123456789abcdef";
 
         for (uint256 i = 0; i < src.length; i++) {
-            encoded[i * 2]     = alphabet[uint8(src[i]) >> 4];
+            encoded[i * 2] = alphabet[uint8(src[i]) >> 4];
             encoded[i * 2 + 1] = alphabet[uint8(src[i]) & 0x0f];
         }
         return encoded;
