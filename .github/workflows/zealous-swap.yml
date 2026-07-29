@@ -15,7 +15,7 @@ on:
 
 jobs:
   test:
-    name: Build & Test
+    name: zealous-swap
     runs-on: ubuntu-latest
     permissions:
       contents: read
