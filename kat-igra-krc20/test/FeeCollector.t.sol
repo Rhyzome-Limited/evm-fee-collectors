@@ -39,7 +39,7 @@ contract MockERC20 {
 contract MockBridge {
     address public lastToken;
     uint256 public lastAmount;
-    string  public lastKaspaAddress;
+    string public lastKaspaAddress;
     uint256 public lastValue;
     uint256 public fixedBurnFee = 0.01 ether;
 
@@ -51,15 +51,11 @@ contract MockBridge {
         fixedBurnFee = fee;
     }
 
-    function burnForBridgeBack(address _token, uint256 _amount, string calldata _kaspaAddress)
-        external
-        payable
-    {
+    function burnForBridgeBack(address _token, uint256 _amount, string calldata _kaspaAddress) external payable {
         require(msg.value == fixedBurnFee, "wrong fee");
         // Simulate real bridge pulling tokens from FeeCollector
-        (bool ok, bytes memory data) = _token.call(
-            abi.encodeWithSelector(0x23b872dd, msg.sender, address(this), _amount)
-        );
+        (bool ok, bytes memory data) =
+            _token.call(abi.encodeWithSelector(0x23b872dd, msg.sender, address(this), _amount));
         require(ok && (data.length == 0 || abi.decode(data, (bool))), "transferFrom failed");
         lastToken = _token;
         lastAmount = _amount;
@@ -73,18 +69,18 @@ contract MockBridge {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 contract FeeCollectorTest is Test {
     FeeCollector public fc;
-    MockBridge   public mockBridge;
-    MockERC20    public token;
+    MockBridge public mockBridge;
+    MockERC20 public token;
 
-    address owner      = makeAddr("owner");
+    address owner = makeAddr("owner");
     address withdrawer = makeAddr("withdrawer");
-    address user       = makeAddr("user");
-    address stranger   = makeAddr("stranger");
+    address user = makeAddr("user");
+    address stranger = makeAddr("stranger");
 
     uint256 constant DEFAULT_FEE_RATE = 75; // 0.75%
     uint256 constant FEE_DENOM = 10_000;
-    uint256 constant BURN_FEE  = 0.01 ether;
-    string  constant L1_ADDR   = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
+    uint256 constant BURN_FEE = 0.01 ether;
+    string constant L1_ADDR = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
 
     function setUp() public {
         mockBridge = new MockBridge();

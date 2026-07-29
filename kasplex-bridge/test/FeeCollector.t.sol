@@ -29,14 +29,14 @@ contract FeeCollectorTest is Test {
     FeeCollector public fc;
     MockBridge public mockBridge;
 
-    address owner     = makeAddr("owner");
+    address owner = makeAddr("owner");
     address withdrawer = makeAddr("withdrawer");
-    address user      = makeAddr("user");
-    address stranger  = makeAddr("stranger");
+    address user = makeAddr("user");
+    address stranger = makeAddr("stranger");
 
     uint256 constant DEFAULT_FEE_RATE = 75; // 0.75%
     uint256 constant FEE_DENOM = 10_000;
-    string  constant L1_ADDR = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
+    string constant L1_ADDR = "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf2";
 
     function setUp() public {
         mockBridge = new MockBridge();
@@ -245,7 +245,9 @@ contract FeeCollectorTest is Test {
         vm.prank(user);
         vm.expectRevert(FeeCollector.InvalidAddress.selector);
         // 91 bytes — exceeds max of 90
-        fc.bridgeToL1{value: 5 ether}("kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf22222222222222222222222");
+        fc.bridgeToL1{value: 5 ether}(
+            "kaspa:qypr0qj7luv26laqlquan9n2zu7wyen87fkdw3kx3kd69ymyw3tj4tsh467xzf22222222222222222222222"
+        );
     }
 
     function testFuzz_bridgeToL1(uint256 kasIn) public {

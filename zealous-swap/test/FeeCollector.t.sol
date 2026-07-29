@@ -73,7 +73,10 @@ contract MockRouter {
         address[] calldata path,
         address to,
         uint256 /* deadline */
-    ) external returns (uint256[] memory amounts) {
+    )
+        external
+        returns (uint256[] memory amounts)
+    {
         // Consume tokenIn from caller
         MockToken(path[0]).transferFrom(msg.sender, address(this), amountIn);
         // Send tokenOut 1:1 for simplicity
@@ -89,7 +92,10 @@ contract MockRouter {
         address[] calldata path,
         address to,
         uint256 /* deadline */
-    ) external returns (uint256[] memory amounts) {
+    )
+        external
+        returns (uint256[] memory amounts)
+    {
         MockToken(path[0]).transferFrom(msg.sender, address(this), amountIn);
         payable(to).transfer(amountIn); // 1:1 KAS out
         amounts = new uint256[](2);
@@ -102,7 +108,11 @@ contract MockRouter {
         address[] calldata path,
         address to,
         uint256 /* deadline */
-    ) external payable returns (uint256[] memory amounts) {
+    )
+        external
+        payable
+        returns (uint256[] memory amounts)
+    {
         MockToken(path[path.length - 1]).transfer(to, msg.value); // 1:1
         amounts = new uint256[](2);
         amounts[0] = msg.value;

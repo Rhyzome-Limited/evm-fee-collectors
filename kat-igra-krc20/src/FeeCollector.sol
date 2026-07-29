@@ -10,9 +10,7 @@ interface IKrc20Bridge {
     /// @param _amount       Gross token amount to burn (18 decimals).
     /// @param _kaspaAddress Kaspa L1 destination address (bech32 string, e.g. "kaspa:qz...").
     /// @dev  msg.value must equal burnFee() exactly — read it immediately before calling.
-    function burnForBridgeBack(address _token, uint256 _amount, string calldata _kaspaAddress)
-        external
-        payable;
+    function burnForBridgeBack(address _token, uint256 _amount, string calldata _kaspaAddress) external payable;
 
     /// @notice Current flat iKAS fee required per burn call.
     ///         Changes via multi-admin proposal — read immediately before signing.
@@ -156,10 +154,7 @@ contract FeeCollector {
     ///       scaling is lossless: `netAmount % 1e10 == 0`.
     ///       The bridge itself will revert if the net amount is not clean,
     ///       but callers should validate upstream to show a friendly error.
-    function bridgeToL1(address _token, uint256 _amount, string calldata _kaspaAddress)
-        external
-        payable
-    {
+    function bridgeToL1(address _token, uint256 _amount, string calldata _kaspaAddress) external payable {
         if (_token == address(0)) revert ZeroAddress();
         if (_amount == 0) revert InsufficientValue();
 
@@ -171,8 +166,8 @@ contract FeeCollector {
         bytes memory addrBytes = bytes(_kaspaAddress);
         if (addrBytes.length < 7 || addrBytes.length > 100) revert InvalidAddress();
         if (
-            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" ||
-            addrBytes[3] != "p" || addrBytes[4] != "a" || addrBytes[5] != ":"
+            addrBytes[0] != "k" || addrBytes[1] != "a" || addrBytes[2] != "s" || addrBytes[3] != "p"
+                || addrBytes[4] != "a" || addrBytes[5] != ":"
         ) revert InvalidAddress();
 
         // Pull gross amount from caller
@@ -199,20 +194,17 @@ contract FeeCollector {
 
     /// @dev Handles both bool-returning and void-returning (e.g. USDT) tokens.
     function _safeApprove(address token, address spender, uint256 amount) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
         if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     function _safeTransferFrom(address token, address from, address to, uint256 amount) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(0x23b872dd, from, to, amount));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x23b872dd, from, to, amount));
         if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     function _safeTransfer(address token, address to, uint256 amount) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
         if (!success || (data.length > 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
@@ -220,9 +212,7 @@ contract FeeCollector {
 
     function withdraw(address token, address to, uint256 amount) external onlyWithdrawer {
         if (to == address(0)) revert ZeroAddress();
-        (bool ok, bytes memory data) = token.call(
-            abi.encodeWithSelector(0x70a08231, address(this))
-        );
+        (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0x70a08231, address(this)));
         uint256 bal = (ok && data.length == 32) ? abi.decode(data, (uint256)) : 0;
         if (amount > bal) revert InsufficientBalance();
         _safeTransfer(token, to, amount);
@@ -231,9 +221,7 @@ contract FeeCollector {
 
     function withdrawAll(address token, address to) external onlyWithdrawer {
         if (to == address(0)) revert ZeroAddress();
-        (bool ok, bytes memory data) = token.call(
-            abi.encodeWithSelector(0x70a08231, address(this))
-        );
+        (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0x70a08231, address(this)));
         uint256 bal = (ok && data.length == 32) ? abi.decode(data, (uint256)) : 0;
         if (bal == 0) revert InsufficientBalance();
         _safeTransfer(token, to, bal);

@@ -18,10 +18,10 @@ import {FeeCollector} from "../src/FeeCollector.sol";
 ///     forge script script/DeployFeeCollector.s.sol --rpc-url $RPC_URL --broadcast
 contract DeployFeeCollector is Script {
     function run() external {
-        address owner      = vm.envAddress("OWNER");
+        address owner = vm.envAddress("OWNER");
         address withdrawer = vm.envAddress("WITHDRAWER");
-        uint256 feeRate    = vm.envUint("FEE_PERCENT");
-        address bridge     = vm.envAddress("BRIDGE");
+        uint256 feeRate = vm.envUint("FEE_PERCENT");
+        address bridge = vm.envAddress("BRIDGE");
 
         console.log("Deploying FeeCollector (Kasplex Bridge)");
         console.log("  owner     :", owner);
