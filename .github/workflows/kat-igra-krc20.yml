@@ -15,7 +15,7 @@ on:
 
 jobs:
   test:
-    name: Build & Test
+    name: kat-igra-krc20
     runs-on: ubuntu-latest
     permissions:
       contents: read
