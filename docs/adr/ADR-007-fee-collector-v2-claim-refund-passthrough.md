@@ -18,7 +18,7 @@ The trigger scenario is easy to state backwards, so it is stated precisely here.
 
 `KasBridge.claimRefund` requires the exit to be **not acknowledged** (§1.4, line 394: `require(!e.acknowledged, "Already acknowledged")`), and requires `block.number >= e.blockNumber + REFUND_BLOCK_DELAY` (§1.4, line 397), with `REFUND_BLOCK_DELAY` immutable at **172 800 blocks ≈ 48 h** for every exit past and future (§1, live-read table; the constant cannot be changed by governance because it is `immutable`, §1 header lines 34–39).
 
-Per KAT (Ashton, 2026-08-17 — see *Open Questions*, not in the evidence pack), relayers acknowledge **without checking L1 liquidity**. So an exit against a liquidity-starved bridge is acknowledged immediately and is therefore **permanently outside the refund path**: once acknowledged, `claimRefund` is dead forever and only the admin-quorum `proposeForceRefundExit` remains (§1.4, "Line 394 makes the window one-sided"). Such an exit waits for KAT's demand-driven rebalance and is then paid out normally, late. That is what has happened in every case so far: 111 of 111 exits acknowledged and processed, 0 refunds ever (operational figure from the briefing — see *Open Questions*).
+Per KAT — Ashton, 2026-08-17, verbatim: *"Relayers acknowledge without checking L1 liquidity. `acknowledgeExit` only requires a valid exit + relayer quorum. No vault balance check."* So an exit against a liquidity-starved bridge is acknowledged immediately and is therefore **permanently outside the refund path**: once acknowledged, `claimRefund` is dead forever and only the admin-quorum `proposeForceRefundExit` remains (§1.4, "Line 394 makes the window one-sided"). Such an exit waits for KAT's demand-driven rebalance and is then paid out normally, late. That is what has happened in every case so far. The census in `withdraw-gate-findings.md` (2026-08-18) found **111 of 111 exits acknowledged and processed, 0 refunds ever** over blocks 7.17M→14.42M, and a log scan run for this ADR reproduces it independently and extends it: **129 exits routed through our collector over blocks 7 000 000→14 745 955, and zero `ExitRefunded` or `ExitForceRefunded` events naming our collector as `sender` in that entire range** (*Open Questions*, item 6). The refund path has never once opened for one of our users.
 
 **The refund path opens only if the relayer set fails to acknowledge at all for 172 800 blocks** — i.e. a KAT validator-layer outage, not a bridge running short of KAS.
 
@@ -69,7 +69,16 @@ The evidence pack answered **YES** to synchronous `exitId` acquisition (§2). Th
 1. `exitId = bridge.exitCounter()` — one extra `STATICCALL` (§2, caveats).
 2. `bridge.lockForExit{value: netValue}(addrBytes)` — unchanged from v1 (§3.2, line 142).
 3. `exitOriginator[exitId] = msg.sender` — one `SSTORE`.
-4. `emit ExitRegistered(exitId, msg.sender, netValue)`.
+4. `emit ExitRegistered(exitId, originator, netValue)`.
+
+**The recorded originator is a parameter, not implicitly `msg.sender`.** v2 exposes two entry points:
+
+- `bridgeToL1(bytes calldata kaspaAddress)` — records `msg.sender`. This is the path kastle-mobile uses today (§5.1, lines 146–158) and its ABI is unchanged.
+- `bridgeToL1(bytes calldata kaspaAddress, address originator)` — records the caller-declared `originator`, rejecting `address(0)`.
+
+Rationale for carrying the second form from day one rather than adding it later: for an **EOA or a hardware wallet** the one-argument form is already correct — `msg.sender` is the user's own account. The form that breaks is an **intermediary**: a smart-contract-wallet relayer, an aggregator, or a batching contract calling on behalf of many users would capture every refund into itself. Smart-contract and hardware wallet support is on Kastle's roadmap (briefing, 2026-08-20 — see *Open Questions*). Under ADR-002 (§8) the contract is immutable, so "add it when we need it" is not an option: it would cost a second full migration — which is precisely the position v1 is in, and precisely the mistake this ADR exists to correct. The parameter is 20 bytes of calldata on a path that already spends ~20 000 gas on the mapping write.
+
+The declared `originator` is **not** a trust concession. The caller has already supplied the full `msg.value`; declaring someone else as originator gives money away rather than taking it, so the parameter creates no path to funds the caller did not already control.
 
 The read-after form (`bridge.exitCounter() - 1`) is equally exact per §2 and works because the `nonReentrant` lock is released before the call returns. Read-before is chosen for one reason only: it needs no arithmetic and no assumption about how many times the counter advanced inside the call. If `lockForExit` reverts on any of its inherited revert paths (§1.3: lines 347–352 min-value/`MIN_FEE_FLOOR`, 357–361 min/max/rolling cap, 344–345 paused/disabled), the whole transaction unwinds and the mapping write unwinds with it (§2, caveats; §1.3, "a revert un-does our fee too").
 
@@ -100,7 +109,15 @@ Flow:
 
 **Missing mapping entry → revert.** `UnknownExit()` is a cheap early exit; upstream would revert anyway with `"Not exit sender"` for any exit v2 did not place (§1.4, line 393). There is deliberately **no** caller-supplied fallback recipient: that would convert an ungated function into a theft vector.
 
-**Failure behaviour is safe.** If step 5 fails — an originator contract that rejects value — the whole transaction reverts, and with it `e.refunded = true` upstream. The exit stays claimable and the call can be retried. No funds are lost or stranded in v2; they never leave KasBridge. A permanently un-payable originator leaves an unclaimable-but-intact exit, which falls to the ops runbook. v2 ships no owner rescue for this case, deliberately (see §10).
+**Failure behaviour is safe, but not self-healing.** If step 5 fails — an originator contract that rejects value — the whole transaction reverts, and with it `e.refunded = true` upstream. The exit stays claimable and the call can be retried. No funds are lost or stranded in v2; they never leave KasBridge.
+
+A **permanently** un-payable originator is a different matter, and it is not an ops-runbook case: it is a dead end. The funds sit in KasBridge; the only thing that can move them is `claimRefund`, which is gated to `e.sender` = v2 (§1.4, line 393); the only v2 code that calls it pays the mapped originator and reverts. Ops has no key, no withdrawal and no override that reaches those funds. `withdrawNative` cannot help — the money is not in v2's balance and never arrives there.
+
+**Decision: v2 ships a second entry point to close this.**
+
+`claimRefundTo(uint256 exitId, address to)` — identical flow to `claimRefundFor`, except gated on `msg.sender == exitOriginator[exitId]` and paying `to` (rejecting `address(0)`). `claimRefundFor(exitId)` becomes the ungated wrapper that passes `to = exitOriginator[exitId]`; both share one internal implementation, so there is one money path, not two.
+
+This is not a theft vector: only the recorded originator can redirect, and only their own refund. It rescues the case that matters — a contract that **can execute but cannot receive value** (no `receive`, no payable fallback), which is a common shape and is exactly what the intermediary scenario in §1 produces. It does not rescue an originator that cannot execute at all — a lost-key EOA, or a contract with no reachable call path. That residual case is genuinely unrecoverable and is stated here as such rather than deferred to a runbook that has no mechanism.
 
 ### 3. Reentrancy and `receive()` posture
 
@@ -170,6 +187,24 @@ Cutover:
 3. kastle-mobile flips `KAT_IGRA_FEE_COLLECTOR_BRIDGE_ADDRESS` in `lib/bridge/fee-collector.ts:43-45` (§4 cross-check — currently byte-for-byte equal to `DEPLOYMENTS.md:32`). One constant; the app's ABI against our contract exposes only `bridgeToL1`, `feeRate`, `owner` (§5.1) and gains `claimRefundFor` + the new events.
 4. The device-local `IgraExitRecord` (§5.2, `exit-history.ts:6-8`) gains an **`exitVia: "v1" | "v2"`** tag written at exit time. `lib/activity/exit-state.ts` routes on it: v2 exits simulate and call `claimRefundFor(exitId)` against v2; v1 exits render as ops-recovery-only and **must stop offering the dead `claimRefund` simulation** that `exit-state.ts:138-144` performs today against the bridge with the user's address (§7-C3).
 
+**The era split must also work for rows that were never written locally.** A parallel session has made kastle-mobile's bridge history **remote-first**, sourced from KAT's `/bridge-history` API (briefing, 2026-08-20 — see *Open Questions*). Those rows carry **neither `exitId` nor `exitVia`**, so a tag written at exit time does not reach them, and a v2 exit that the user sees only via the KAT API would show no claim button. The era must therefore be derivable, not just recorded:
+
+1. **`ExitRegistered` lookup wins.** Filter `topic2 = user address`; a match on the row's L2 transaction hash yields both the era (v2, by definition — v1 emits no such event) and the `exitId` the claim needs. This is the only derivation that works with zero local state.
+2. **Else, deploy-block comparison.** A row whose block precedes v2's deploy block is v1-era; no claim button.
+3. **Else, fail closed.** No era, no claim button. Never render a claim path that will revert — that is exactly the defect §7-C3 already produced once, and a wrong "claim" button on real money is worse than a missing one.
+
+*(Step 1 assumes the `/bridge-history` row exposes the L2 transaction hash to join on. If it does not, the join key must be user + block + amount, which is weaker. See *Open Questions*.)*
+
+**Three history sources now exist; the redundancy should be deliberate.**
+
+| Source | Authoritative for | Fails when |
+|---|---|---|
+| KAT `/bridge-history` API | L1 settlement status and payout — the only source that sees the Kaspa side | KAT is down; carries no `exitId`, no era |
+| Device-local `IgraExitRecord` | fast render, offline, carries `exitVia` at write time | device lost or reinstalled; `exitId` is nullable by design (§5.2) |
+| `ExitRegistered` logs | **the only trustless source**; user↔exit↔era binding | v1-era exits (no such event); needs an RPC log query |
+
+Merge rule: union by L2 transaction hash, and **never let a source that lacks era information suppress a claim** a source with era information supports. The KAT API is authoritative for status; `ExitRegistered` is authoritative for era and `exitId`.
+
 **v1 disposition: drain and retire. Decided here, not deferred.** (The wiki's four undecided orphan deployments are the precedent for why leaving this open is a mistake — briefing figure, see *Open Questions*.)
 
 - *Drain:* withdraw the remaining balance — 422.6925 iKAS at block 14732471 (§4) — after the cutover. Timing is unconstrained by refunds: refund money comes from KasBridge's reserves, not ours (§3b), and v1 has no `claimRefundFor` to fund in any case.
@@ -181,11 +216,11 @@ Cutover:
 
 v2 keeps ADR-003's model unchanged (§6): hand-rolled two-role access control, two-step ownership handover via `pendingOwner`, `onlyWithdrawer` admitting **both** withdrawer and owner (§3.1, lines 53–61; §3.4 table). **v2 adds no new owner powers.** The privileged surface stays exactly: `transferOwnership`, `acceptOwnership`, `setWithdrawer`, `setFeeRate`, `withdrawNative`, `withdrawAllNative`.
 
-**Non-negotiable: `claimRefundFor` works even if owner keys are lost.** It does, and the proof is that it depends on nothing owner-controlled:
+**Non-negotiable: `claimRefundFor` works even if owner keys are lost.** It does — as does `claimRefundTo` (§2) — and the proof is that neither depends on anything owner-controlled:
 
-- It carries no `onlyOwner` / `onlyWithdrawer` modifier and reads neither `owner` nor `withdrawer`.
-- Its only precondition inside v2 is `exitOriginator[exitId] != address(0)`, written at `bridgeToL1` time by the user's own transaction — not by an admin.
-- Its payout target is that mapping entry, which no admin function can modify (there is no setter, and none is added).
+- Neither carries an `onlyOwner` / `onlyWithdrawer` modifier, and neither reads `owner` or `withdrawer`.
+- The only precondition inside v2 is `exitOriginator[exitId] != address(0)`, written at `bridgeToL1` time by the user's own transaction — not by an admin.
+- The payout target is that mapping entry (or, for `claimRefundTo`, an address the mapped originator itself names), which no admin function can modify: there is no setter, and none is added.
 - Its remaining preconditions are enforced upstream by KasBridge (§1.4, lines 393–397), which our keys cannot influence.
 - Upstream's `claimRefund` is *"Always callable, even when paused/disabled, so users can recover funds during emergencies"* (§1.4, doc comment lines 388–390).
 
@@ -212,12 +247,12 @@ v2 keeps every v1 event (`FeeCollected`, `NativeWithdrawn`, `OwnerSet`, `Ownersh
 | Event | Emitted | Purpose |
 |---|---|---|
 | `ExitRegistered(uint256 indexed exitId, address indexed originator, uint256 netAmount)` | `bridgeToL1`, after the mapping write | The on-chain user↔exit link that KasBridge's own `Exit` struct has no slot for (§1.1) |
-| `RefundForwarded(uint256 indexed exitId, address indexed originator, uint256 amount)` | `claimRefundFor`, after a successful forward | Settlement receipt for Activity |
+| `RefundForwarded(uint256 indexed exitId, address indexed originator, address to, uint256 amount)` | `claimRefundFor` / `claimRefundTo`, after a successful forward | Settlement receipt for Activity. `to` equals `originator` on the ungated path and differs only when the originator redirected (§2) |
 | `NativeReceived(address indexed from, uint256 amount)` | `receive()` | Makes unsolicited inflows — force-refunds above all (§5) — visible instead of silent (§3.6) |
 
 Two indexed topics plus non-indexed data mirrors upstream's `LockForExit` layout (§1.2), which is what makes exits *"cheaply enumerable off chain by filtering `topic2 == feeCollector`"*.
 
-**`ExitRegistered` is the one that earns its gas.** Today `exitId` is recovered off chain from the receipt and stored device-locally, and it is *"**nullable by design**"* — `exitId: string | null`, null when the event decode fails (§5.2, `exit-history.ts:6-8`, `useKatIgraToKasBridge.ts:360-391`, whose whole block is wrapped in a best-effort `try/catch`). Any device loss or decode failure today means the exit is unrecoverable by the user. With `ExitRegistered`, filtering `topic2 == user` rebuilds the full exit list from chain.
+**`ExitRegistered` is the one that earns its gas** — and it is now the third bridge-history source (§6), not a nicety. Today `exitId` is recovered off chain from the receipt and stored device-locally, and it is *"**nullable by design**"* — `exitId: string | null`, null when the event decode fails (§5.2, `exit-history.ts:6-8`, `useKatIgraToKasBridge.ts:360-391`, whose whole block is wrapped in a best-effort `try/catch`). Any device loss or decode failure today means the exit is unrecoverable by the user. With `ExitRegistered`, filtering `topic2 == user` rebuilds the full exit list from chain.
 
 **What kastle-mobile keys on:**
 
@@ -230,7 +265,7 @@ Two indexed topics plus non-indexed data mirrors upstream's `LockForExit` layout
 - **No fee-logic changes.** `feeRate` stays a constructor parameter, owner-settable at runtime, bounded by `MAX_FEE_RATE = 1_000` (§3.3, lines 24/68/76/105–109), per ADR-006 (§6). The 0.75 % value itself is owned by Kastle Wiki ADR-001, not this repo (§6).
 - **No fee segregation.** No `pendingExitFees` analogue, no reserve, no window-aware withdrawal, no float (settled in §4).
 - **No changes to the other three collectors.** `kasplex-bridge`, `kat-igra-krc20`, `zealous-swap` are untouched. ADR-004 (§6) requires v2 to land inside `kat-igra-bridge/` only, *"even if v2 duplicates logic already in `kasplex-bridge`"* — no shared base, no new package. Note the surfaces genuinely differ: two projects have 2 withdrawal functions, two have 4 (§3.7).
-- **No new privileged powers.** No pause, no upgrade hook, no rescue function, no arbitrary-call escape hatch — v1 has none (§3.4) and v2 adds none.
+- **No new privileged powers.** No pause, no upgrade hook, no rescue function, no arbitrary-call escape hatch — v1 has none (§3.4) and v2 adds none. In particular there is **no owner rescue for a stuck refund**: the redirect in §2 is gated to the originator, not to us, so no Kastle key can ever redirect a user's refund.
 - **No automatic force-refund forwarding** (§5).
 - **No narrowing of `to` on the withdrawal functions.** That belongs to the ADR-003 multisig decision (§7).
 - **No ERC-20 path.** v1 has none, confirmed by grep (§3.7).
@@ -261,12 +296,12 @@ Two indexed topics plus non-indexed data mirrors upstream's `LockForExit` layout
 
 **Negative / accepted**
 
-- **Gas on the hot path:** every `bridgeToL1` pays one extra `STATICCALL` plus one cold `SSTORE` (~20 000 gas) plus one event, forever, to insure an event that has never occurred.
+- **Gas on the hot path:** every `bridgeToL1` pays one extra `STATICCALL` plus one cold `SSTORE` (~20 000 gas) plus one event, forever, to insure an event that has never occurred in 129 exits (*Open Questions*, item 6).
 - **Unbounded storage growth:** one slot per exit, never cleared (§1).
-- **A permanent ungated money-moving path.** `claimRefundFor` is the entire crypto surface of this change and must clear the full human review gate. Its safety rests on exactly two properties: the payout target is read from a mapping no admin can write, and the forwarded amount is bounded by the balance delta of the upstream call.
+- **A permanent ungated money-moving path.** `claimRefundFor` / `claimRefundTo` are the entire crypto surface of this change and must clear the full human review gate. Its safety rests on exactly two properties: the payout target is read from a mapping no admin can write, and the forwarded amount is bounded by the balance delta of the upstream call.
 - **v1-era exits gain nothing, ever** (§6).
 - **Coordinated release required:** contract deploy → `DEPLOYMENTS.md` → kastle-mobile constant + `exitVia` tag + `exit-state.ts` routing → admin-ui. Between deploy and app release, v2's mapping is unused.
-- **An un-payable originator** produces an unclaimable-but-intact exit that only the ops runbook can resolve (§2).
+- **An originator that can neither receive value nor execute** — a lost-key EOA, or a contract with no reachable call path — leaves an intact but permanently unclaimable exit. `claimRefundTo` (§2) closes the can-execute-but-cannot-receive case; nothing closes this one, and no ops mechanism exists for it.
 - **Force-refund inflow remains a manual, human-detected event** (§5).
 
 **CI — the evidence pack contradicts the briefing here.** `kat-igra-bridge` **does have CI**: `.github/workflows/kat-igra-bridge.yml` runs `forge fmt --check`, `forge build --sizes` and `forge test -vvv` on push and PR filtered to `kat-igra-bridge/**` (§7-C1). Because the trigger is a path filter, **a v2 file added under `kat-igra-bridge/` is covered automatically**, and `test/FeeCollector.t.sol`'s 34 tests already run on every touch. The pack states it plainly: *"The implementation session does not need to run these manually."* Two caveats carried forward:
@@ -281,24 +316,37 @@ Two indexed topics plus non-indexed data mirrors upstream's `LockForExit` layout
 1. **Leo approves this ADR** and it is published to the wiki's Decisions folder as ADR-007 (§6).
 2. **Ashton's sanity-check** on the trigger-scenario framing and on `claimRefundFor` against KasBridge as deployed.
 3. **Full crypto-surface human gates** on the money path — `claimRefundFor`, the balance-delta measurement, `receive()`, and the mapping write.
-4. **CI green** on the `kat-igra-bridge` workflow, including the existing 34 tests (§7-C1), with v2's own tests added under `kat-igra-bridge/`.
-5. **Duplicate workflow files removed** (§7-C1).
-6. **kastle-mobile change staged and reviewed** — constant flip, `exitVia` tag, `exit-state.ts` routing — so the app release can follow the deploy without a gap.
-7. **`DEPLOYMENTS.md` updated** with the v2 row and the v1 retirement, and the v1 drain executed.
+4. **Deploy script corrected and the constructor argument verified on chain.** `kat-igra-bridge/script/DeployFeeCollector.s.sol` documents the deployment env in its header comment, and **line 17 still names `BRIDGE=0x4bb88C213d3eD9dc4bae694f1bc1bF745903b2d0`** — Igra's permissionless `KasExitBridge`, per wiki ADR-002 (2026-07-27), **not** KAT's custodial `KasBridge` `0xb82c5524…` that the live collector actually uses (§4, live `bridge()` read). On this branch line 18 immediately re-assigns `BRIDGE=0xb82c5524c5b5c055efb2F8f4AbCcE3173c504f2d`, so a shell taking the last assignment gets the right value — but a copy-paste that stops at line 17, or any reader trusting the first address they see, deploys against the wrong bridge. Under ADR-002 (§8) `bridge` is `immutable`, so that mistake is **unrecoverable**: the collector would forward user funds into a contract that never placed the exit, with no setter and no upgrade path. A separate PR correcting the script is in flight and this may already be resolved; the evidence pack verified the live `bridge()` value (§4), **not** the script line, so the state of the script must be checked rather than assumed. Two things gate the deploy:
+   - the script's example block names `0xb82c5524…` and **only** `0xb82c5524…`; and
+   - immediately after deploy and **before anything routes through v2**, read `bridge()` from the new address on Igra Mainnet and confirm it equals `0xb82c5524c5b5c055efb2F8f4AbCcE3173c504f2d` byte for byte.
+5. **CI green** on the `kat-igra-bridge` workflow, including the existing 34 tests (§7-C1), with v2's own tests added under `kat-igra-bridge/`.
+6. **Duplicate workflow files removed** (§7-C1).
+7. **kastle-mobile change staged and reviewed** — constant flip, `exitVia` tag, `exit-state.ts` routing, **and the API-row era derivation of §6** — so the app release can follow the deploy without a gap.
+8. **`DEPLOYMENTS.md` updated** with the v2 row and the v1 retirement, and the v1 drain executed.
 
 ---
 
 ## Open Questions & Uncited Assumptions
 
-Everything here is **not** sourced from `docs/specs/kasbridge-evidence.md`. None of it is load-bearing for the design; each is recorded so it can be confirmed rather than assumed.
+Everything here is **not** sourced from `docs/specs/kasbridge-evidence.md`. None of it is load-bearing for the design; each is recorded so it can be confirmed rather than assumed. Items 1, 2 and 6 were open in the first draft and are now **closed** — sources and scan results below.
 
-1. **"Relayers acknowledge without checking L1 liquidity"** (Ashton, 2026-08-17). Sourced from the briefing. The pack quotes the *code* consequence — once `acknowledged` is set, `claimRefund` is dead (§1.4, line 394) — but says nothing about relayer behaviour. This assumption is the whole of the *Context* framing; confirm with Ashton.
-2. **"111 of 111 exits acknowledged and processed, 0 refunds ever."** Operational figure from the briefing. The pack's nearest data are `exitCounter() = 1517` across *all* senders (§1, live table) and 4 FeeCollector-routed `LockForExit` events within one 172 800-block window (§3b). The pack did **not** scan `ExitRefunded` / `ExitForceRefunded` history for our collector. Worth one log scan before publication.
+1. **CLOSED — sourced.** *"Relayers acknowledge without checking L1 liquidity. `acknowledgeExit` only requires a valid exit + relayer quorum. No vault balance check."* — **Ashton, 2026-08-17**, verbatim. This is the whole of the *Context* framing and it is now attributed, though still to a person rather than to read code; the pack independently supplies the code consequence (§1.4, line 394: once `acknowledged` is set, `claimRefund` is dead forever).
+2. **CLOSED — sourced and independently reproduced.** The 111-exits / 0-refunds census comes from **`withdraw-gate-findings.md` (2026-08-18)**, a complete census over blocks 7.17M→14.42M that did scan for refund events. It is uncommitted in the kastle-mobile working tree, which is why the evidence-pack session could not find it. Independently reproduced for this ADR by log scan (see item 6): **129** `LockForExit` events with `topic2 = 0x9d01E8a2…` over blocks 7 000 000→14 745 955, versus the census's 111 over the shorter range ending at 14.42M — consistent, the difference being exits placed since the census cutoff. Refunds over the full range: **zero** (item 6).
 3. **ADR house style.** §6 describes what ADR-001…ADR-006 *require of v2*, never their format or template. The Status/Context/Decision/Alternatives/Consequences shape used here is an assumption; reformat on publication if the Notion pages differ.
 4. **"Four undecided orphan deployments"** in the wiki, cited as precedent in §6. From the briefing; the pack does not mention them.
 5. **EVM gas constants** (cold zero→non-zero `SSTORE` = 20 000 gas). General EVM cost schedule, not a fact from the pack. Real cost should be measured with `forge test --gas-report` during implementation.
-6. **Has `proposeForceRefundExit` ever fired for our collector?** Unknown. §3b scanned only `NativeWithdrawn` on our address and `LockForExit` on the bridge. If it has fired, the money is in v1's balance now and may already have been withdrawn.
-7. **Can `IgraExitRecord` take a new `exitVia` field cheaply?** §5.2 quotes the type but says nothing about migration of existing device-local records. Assumed: absent `exitVia` reads as `"v1"`.
-8. **Whether `owner` and `withdrawer` EOAs are separately held**, and by whom. §4 gives addresses and confirms they are distinct; custody is not documented in the pack. Relevant to the ADR-003 multisig item, not to v2's correctness.
-9. **Whether KasBridge ever sends value to us for any reason other than the two refund paths.** The pack documents `claimRefund` (§1.4) and force-refund (§1.5); it does not claim the enumeration is exhaustive. `receive()` accepts unconditionally regardless, so this is not load-bearing.
-10. **Admin-ui's exact coupling to the collector address.** §6 mentions admin-ui as part of a migration; the pack read `kastle-mobile` but not admin-ui's wiring. Scope the change during implementation.
+6. **CLOSED — no. `proposeForceRefundExit` has never fired for our collector, and neither has `claimRefund`.** Log scan run for this ADR against `https://rpc.igralabs.com:8545`, contract `0xb82c5524…`, blocks **7 000 000 → 14 745 955**, in 100 000-block chunks with full coverage of the range (our collector's first exit was block 7 171 049 per §3b, so nothing earlier can concern it):
+
+   | Event | topic0 | Hits on the whole bridge | Hits with `sender = 0x9d01E8a2…` |
+   |---|---|---|---|
+   | `ExitRefunded(uint256,address,uint256)` | `0x947299f0…a7cafd` | **2** — blocks 8 988 521 and 9 244 459, both `sender = 0x72de148e0cd86701e66e3f478eb72f5a36cfd142` | **0** |
+   | `ExitForceRefunded(uint256,address,uint256)` | `0x6d583605…4e12630` | **5**, all `sender = 0x9807f7b5762a1336e569da3b8afe9403533fe228` | **0** |
+   | `LockForExit(...)` with `topic2 = 0x9d01E8a2…` | `0x19cadda9…a30ee70` | — | **129** |
+
+   Both refund events index `sender` as `topic2` (§1.2, lines 170 and 174), which is what makes the filter exact. **Consequence: no user's refund is sitting in v1's balance, and none was swept in the 2 274.96 iKAS drain of §3b. The v1 drain step of §6 is unchanged.** The 129-to-0 figures also make the *Context* claim — the refund path has never once opened for our users — a scanned fact rather than a briefing figure.
+7. **Does the KAT `/bridge-history` API row expose the L2 transaction hash?** The §6 era derivation joins API rows to `ExitRegistered` logs on that hash. The briefing (2026-08-20) states the rows carry no `exitId` and no `exitVia`; it does not say whether a tx hash is present. If it is absent, the join degrades to user + block + amount, which is not guaranteed unique. Confirm against the parallel Activity session's implementation.
+8. **Smart-contract and hardware wallet support on Kastle's roadmap** (briefing, 2026-08-20) — timeline and shape unknown. §1's two-argument `bridgeToL1` is sized for the intermediary case that roadmap implies, not for a specification anyone has read.
+9. **Can `IgraExitRecord` take a new `exitVia` field cheaply?** §5.2 quotes the type but says nothing about migration of existing device-local records. Assumed: absent `exitVia` reads as `"v1"`.
+10. **Whether `owner` and `withdrawer` EOAs are separately held**, and by whom. §4 gives addresses and confirms they are distinct; custody is not documented in the pack. Relevant to the ADR-003 multisig item, not to v2's correctness.
+11. **Whether KasBridge ever sends value to us for any reason other than the two refund paths.** The pack documents `claimRefund` (§1.4) and force-refund (§1.5); it does not claim the enumeration is exhaustive. `receive()` accepts unconditionally regardless, so this is not load-bearing.
+12. **Admin-ui's exact coupling to the collector address.** §6 mentions admin-ui as part of a migration; the pack read `kastle-mobile` but not admin-ui's wiring. Scope the change during implementation.
