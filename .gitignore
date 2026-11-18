@@ -23,3 +23,6 @@ kasplex-bridge/lib/*
 .logs/
 .ignore/
 node_modules/
+monitoring/.state/
+__pycache__/
+*.pyc

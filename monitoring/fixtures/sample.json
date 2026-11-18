@@ -1,0 +1,93 @@
+{
+  "_comment": [
+    "Synthetic recorded JSON-RPC responses for one --once poll of both chains (head = start_block + 10).",
+    "Shape: {\"responses\": {\"<chainId>|<method>|<params as json.dumps(sort_keys=True, separators=(',', ':'))>\": <full JSON-RPC response>}}.",
+    "Values are full envelopes, so a fixture can also replay an 'error' member or a malformed body.",
+    "Addresses, hashes and owners are synthetic, not on-chain data."
+  ],
+  "responses": {
+    "202555|eth_blockNumber|[]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x14015ee"
+    },
+    "202555|eth_getLogs|[{\"address\":[\"0x2f15c748a51438d02347878a2a0f26bc35b5e938\",\"0x642638cf9d656378b679de02fabcc5e4e7f1f915\",\"0xdfa17269221ce9fdba5bbd28f209a3a23b738978\"],\"fromBlock\":\"0x14015e4\",\"toBlock\":\"0x14015ee\",\"topics\":[[\"0x342827c97908e5e2f71151c08502a66d44b6f758e3ac2f1de95f02eb95f0a735\",\"0x7ad56d4e6e460ed64deb189a2dba66e30e9feed79fe885f88d5fed470b2d0e8e\"]]}]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": [
+        {
+          "address": "0x2f15c748a51438d02347878a2a0f26bc35b5e938",
+          "topics": [
+            "0x342827c97908e5e2f71151c08502a66d44b6f758e3ac2f1de95f02eb95f0a735",
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0x0000000000000000000000001111111111111111111111111111111111111111"
+          ],
+          "data": "0x",
+          "blockNumber": "0x14015e6",
+          "blockHash": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "transactionHash": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+          "logIndex": "0x0",
+          "transactionIndex": "0x0",
+          "removed": false
+        },
+        {
+          "address": "0x2f15c748a51438d02347878a2a0f26bc35b5e938",
+          "topics": [
+            "0x7ad56d4e6e460ed64deb189a2dba66e30e9feed79fe885f88d5fed470b2d0e8e",
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0x0000000000000000000000002222222222222222222222222222222222222222"
+          ],
+          "data": "0x",
+          "blockNumber": "0x14015e6",
+          "blockHash": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "transactionHash": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+          "logIndex": "0x1",
+          "transactionIndex": "0x0",
+          "removed": false
+        }
+      ]
+    },
+    "202555|eth_getBlockByNumber|[\"0x14015ee\",false]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "number": "0x14015ee",
+        "hash": "0xe1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+      }
+    },
+    "38833|eth_blockNumber|[]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": "0x6c0d39"
+    },
+    "38833|eth_getLogs|[{\"address\":[\"0x2f15c748a51438d02347878a2a0f26bc35b5e938\",\"0x642638cf9d656378b679de02fabcc5e4e7f1f915\",\"0x9d01e8a2f3dd0b1fc739d32ca8d79509b501eab8\"],\"fromBlock\":\"0x6c0d2f\",\"toBlock\":\"0x6c0d39\",\"topics\":[[\"0x342827c97908e5e2f71151c08502a66d44b6f758e3ac2f1de95f02eb95f0a735\",\"0x7ad56d4e6e460ed64deb189a2dba66e30e9feed79fe885f88d5fed470b2d0e8e\"]]}]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": [
+        {
+          "address": "0x9d01e8a2f3dd0b1fc739d32ca8d79509b501eab8",
+          "topics": [
+            "0x342827c97908e5e2f71151c08502a66d44b6f758e3ac2f1de95f02eb95f0a735",
+            "0x0000000000000000000000001111111111111111111111111111111111111111",
+            "0x0000000000000000000000003333333333333333333333333333333333333333"
+          ],
+          "data": "0x",
+          "blockNumber": "0x6c0d36",
+          "blockHash": "0xb7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7",
+          "transactionHash": "0xd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+          "logIndex": "0x3",
+          "transactionIndex": "0x0",
+          "removed": false
+        }
+      ]
+    },
+    "38833|eth_getBlockByNumber|[\"0x6c0d39\",false]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "number": "0x6c0d39",
+        "hash": "0xe2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"
+      }
+    }
+  }
+}
