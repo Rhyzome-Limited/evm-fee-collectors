@@ -16,7 +16,8 @@ on:
 jobs:
   test:
     name: monitoring
-    runs-on: ubuntu-latest
+    # ubuntu-24.04: newest LTS with a Python 3.8 build in actions/python-versions (26.04 has none).
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
