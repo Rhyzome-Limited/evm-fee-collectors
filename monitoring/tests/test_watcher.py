@@ -291,6 +291,7 @@ class PollTests(Base):
         _, _, err = self.poll(rpc, st)
         self.assertEqual([f["fromBlock"] for f in rpc.log_calls()], [hex(cur + 1), hex(cur - 11)])
         self.assertEqual([json.loads(e)["event"] for e in err], ["reorg", "reorg"])
+        self.assertEqual(self.saved(), {"block": cur + 10, "hash": bhash(cur + 10, salt=1), "seen": []})
 
     def test_unstable_anchor_gives_up(self):
         head = S1 + 10
@@ -302,7 +303,8 @@ class PollTests(Base):
 
         rpc = FakeRPC(head, [mklog(S1 + 3)], after_logs=flap)
         out, _ = self.poll_raises(rpc, self.state())
-        self.assertEqual(len(rpc.log_calls()), w.REORG_RETRIES + 1)
+        # 4 = the first attempt + 3 re-scans (the cap is 3)
+        self.assertEqual(len(rpc.log_calls()), 4)
         self.assertEqual(out, [])
         self.assertFalse(os.path.exists(self.path))
 
