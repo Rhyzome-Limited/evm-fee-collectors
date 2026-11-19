@@ -1,0 +1,37 @@
+name: monitoring CI
+
+permissions: {}
+
+on:
+  push:
+    paths:
+      - "monitoring/**"
+      - ".github/workflows/monitoring.yml"
+  pull_request:
+    paths:
+      - "monitoring/**"
+      - ".github/workflows/monitoring.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: monitoring
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The lowest version that the runbook promises.
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+
+      - name: Show Python version
+        run: python3 --version
+
+      - name: Run tests
+        run: python3 -m unittest discover -s monitoring/tests -t . -v

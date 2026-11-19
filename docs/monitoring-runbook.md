@@ -380,4 +380,6 @@ WARNING: an unplanned `OwnerSet` gives full control of the contract to `new`. Th
 python3 -m unittest discover -s monitoring/tests -t . -v
 ```
 
+CI runs this command on each pull request that touches `monitoring/` (`.github/workflows/monitoring.yml`).
+
 The tests are hermetic: no network, no sleep, temporary files only. `monitoring/fixtures/sample.json` documents the fixture format. Each key is `"<chainId>|<method>|<params as compact sorted JSON>"` and each value is a full JSON-RPC response.
