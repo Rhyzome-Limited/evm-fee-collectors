@@ -47,6 +47,7 @@ CHAINS = {
 }
 
 REORG_DEPTH = 12
+REORG_RETRIES = 3  # re-scans of a range with a changing anchor hash before the poll fails
 LOG_CHUNK = 2000
 SEEN_MAX = 512
 HTTP_TIMEOUT = 15
@@ -233,21 +234,39 @@ def poll_chain(chain_id, rpc, state, path, confirmations, webhook_url, chunk=LOG
         state["chains"][key] = {"block": block, "hash": bhash, "seen": seen}
         save_state(path, state)
 
+    def check_cursor():
+        nonlocal block, bhash
+        if bhash is not None and _block_hash(rpc, block) != bhash:
+            new = max(block - REORG_DEPTH, cfg["start_block"] - 1)
+            _log("warning", "reorg", chainId=chain_id, detail="cursor %d hash changed, rewind to %d" % (block, new))
+            block, bhash = new, None
+
     head = _qty(rpc("eth_blockNumber", [])) - confirmations
-    if bhash is not None and _block_hash(rpc, block) != bhash:
-        new = max(block - REORG_DEPTH, cfg["start_block"] - 1)
-        _log("warning", "reorg", chainId=chain_id, detail="cursor %d hash changed, rewind to %d" % (block, new))
-        block, bhash = new, None
+    check_cursor()
 
     targets = sorted(cfg["targets"])
     frm = block + 1
+    rescans = 0
     while frm <= head:
         to = min(frm + chunk - 1, head)
+        before = _block_hash(rpc, to)
+        if before is None:
+            raise RPCError("block %d not found" % to)
         raw = rpc("eth_getLogs", [{"address": targets, "fromBlock": hex(frm), "toBlock": hex(to),
                                    "topics": [[OWNER_SET, WITHDRAWER_SET]]}])
         if not isinstance(raw, list):
             raise RPCError("eth_getLogs result is not a list")
         logs = sorted((_parse_log(l, frm, to) for l in raw), key=lambda l: (l["block"], l["logIndex"]))
+        after = _block_hash(rpc, to)
+        if after != before:  # the logs may come from a dropped branch: no alert, nothing committed
+            rescans += 1
+            _log("warning", "reorg", chainId=chain_id,
+                 detail="block %d hash changed during scan of %d-%d: %s -> %s, re-scan" % (to, frm, to, before, after))
+            if rescans > REORG_RETRIES:
+                raise RPCError("block %d hash unstable after %d re-scans" % (to, REORG_RETRIES))
+            check_cursor()  # the fork point can be below the cursor
+            frm = block + 1
+            continue
         for log in logs:
             if log["removed"] or not log["event"] or log["contract"] not in cfg["targets"] or log["key"] in seen:
                 continue
@@ -264,10 +283,7 @@ def poll_chain(chain_id, rpc, state, path, confirmations, webhook_url, chunk=LOG
                 post_webhook(webhook_url, line)
             seen = (seen + [log["key"]])[-SEEN_MAX:]
             commit()  # old cursor, new seen: a crash replays at most this one alert
-        h = _block_hash(rpc, to)
-        if h is None:
-            raise RPCError("block %d not found" % to)
-        block, bhash = to, h
+        block, bhash = to, before
         commit()
         frm = to + 1
 

@@ -50,8 +50,9 @@ def mklog(block, address=BRIDGE, t0=OWNER, prev=ZERO, new=ALICE, idx=0, tx=None,
 class FakeRPC:
     """Node stand-in: records every call and filters logs by the requested range."""
 
-    def __init__(self, head, logs=(), blocks=None, fail=None):
+    def __init__(self, head, logs=(), blocks=None, fail=None, after_logs=None):
         self.head, self.logs, self.blocks, self.fail = head, list(logs), blocks or {}, fail
+        self.after_logs = after_logs  # one-shot fn(self): the chain switches after the node answered
         self.calls = []
 
     def __call__(self, method, params):
@@ -65,7 +66,11 @@ class FakeRPC:
             return self.blocks[n] if n in self.blocks else {"hash": bhash(n)}
         if method == "eth_getLogs":
             lo, hi = int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)
-            return [l for l in self.logs if lo <= int(l["blockNumber"], 16) <= hi]
+            result = [l for l in self.logs if lo <= int(l["blockNumber"], 16) <= hi]
+            if self.after_logs:
+                cb, self.after_logs = self.after_logs, None
+                cb(self)
+            return result
         raise AssertionError("unexpected method " + method)
 
     def log_calls(self):
@@ -114,6 +119,13 @@ class Base(unittest.TestCase):
     def poll(self, rpc, state=None, cid=KASPLEX, confirmations=0, webhook=None, **kw):
         state = state if state is not None else self.state()
         return run(w.poll_chain, cid, rpc, state, self.path, confirmations, webhook, **kw)
+
+    def poll_raises(self, rpc, state):
+        """Poll that must raise RPCError; return its stdout and stderr lines."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(w.RPCError):
+            w.poll_chain(KASPLEX, rpc, state, self.path, 0, None)
+        return out.getvalue().splitlines(), err.getvalue().splitlines()
 
 
 class PollTests(Base):
@@ -220,11 +232,79 @@ class PollTests(Base):
     def test_null_anchor_block_does_not_commit_range(self):
         log = mklog(S1 + 2)
         rpc = FakeRPC(S1 + 10, [log], blocks={S1 + 10: None})
-        with self.assertRaises(w.RPCError):
-            run(w.poll_chain, KASPLEX, rpc, self.state(), self.path, 0, None)
-        # alert went out and is remembered, but the range is not committed
-        self.assertEqual(self.saved()["block"], S1 - 1)
-        self.assertEqual(len(self.saved()["seen"]), 1)
+        out, _ = self.poll_raises(rpc, self.state())
+        # the null anchor is found before the query: no alert, nothing committed
+        self.assertEqual(out, [])
+        self.assertFalse(os.path.exists(self.path))
+
+    def reorg_rpc(self, fail=None):
+        """logA on the old branch; after the first eth_getLogs the head hash changes and logB replaces it."""
+        head = S1 + 10
+        log_a, log_b = mklog(S1 + 3, new=ALICE), mklog(S1 + 4, new=BOB)
+
+        def flip(r):
+            r.blocks[head] = {"hash": bhash(head, salt=1)}
+            r.logs = [log_b]
+            r.fail = fail
+
+        return FakeRPC(head, [log_a], after_logs=flip), head, log_b
+
+    def test_reorg_between_anchor_reads_rescans_in_loop(self):
+        rpc, head, log_b = self.reorg_rpc()
+        _, out, err = self.poll(rpc)
+        self.assertEqual(len(out), 1, out)
+        a = json.loads(out[0])
+        self.assertEqual((a["txHash"], a["new"]), (log_b["transactionHash"], BOB))
+        self.assertEqual(len(err), 1, err)
+        msg = json.loads(err[0])
+        self.assertEqual(msg["event"], "reorg")
+        for part in (str(head), bhash(head), bhash(head, salt=1)):
+            self.assertIn(part, msg["detail"])
+        ranges = [(f["fromBlock"], f["toBlock"]) for f in rpc.log_calls()]
+        self.assertEqual(ranges, [(hex(S1), hex(head))] * 2)
+        self.assertEqual(self.saved(), {"block": head, "hash": bhash(head, salt=1),
+                                        "seen": ["%s:0" % log_b["transactionHash"]]})
+
+    def test_reorg_between_anchor_reads_emits_nothing_until_rescan(self):
+        rpc, head, log_b = self.reorg_rpc(fail="eth_getLogs")
+        st = self.state()
+        out, err = self.poll_raises(rpc, st)
+        self.assertEqual(out, [])
+        self.assertEqual([json.loads(e)["event"] for e in err], ["reorg"])
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(st, self.state())
+        rpc.fail = None
+        _, out, _ = self.poll(rpc, st)
+        self.assertEqual(rpc.log_calls()[-1]["fromBlock"], hex(S1))
+        self.assertEqual([json.loads(l)["txHash"] for l in out], [log_b["transactionHash"]])
+        self.assertEqual(self.saved()["block"], head)
+
+    def test_reorg_during_scan_rechecks_cursor(self):
+        cur = S1 + 1000
+        st = self.state({KASPLEX: {"block": cur, "hash": bhash(cur), "seen": []}})
+
+        def flip(r):  # the fork point is below the cursor
+            r.blocks[cur] = {"hash": bhash(cur, salt=1)}
+            r.blocks[cur + 10] = {"hash": bhash(cur + 10, salt=1)}
+
+        rpc = FakeRPC(cur + 10, after_logs=flip)
+        _, _, err = self.poll(rpc, st)
+        self.assertEqual([f["fromBlock"] for f in rpc.log_calls()], [hex(cur + 1), hex(cur - 11)])
+        self.assertEqual([json.loads(e)["event"] for e in err], ["reorg", "reorg"])
+
+    def test_unstable_anchor_gives_up(self):
+        head = S1 + 10
+        salts = iter(range(1, 100))
+
+        def flap(r):
+            r.blocks[head] = {"hash": bhash(head, salt=next(salts))}
+            r.after_logs = flap
+
+        rpc = FakeRPC(head, [mklog(S1 + 3)], after_logs=flap)
+        out, _ = self.poll_raises(rpc, self.state())
+        self.assertEqual(len(rpc.log_calls()), w.REORG_RETRIES + 1)
+        self.assertEqual(out, [])
+        self.assertFalse(os.path.exists(self.path))
 
 
 class WebhookTests(Base):
