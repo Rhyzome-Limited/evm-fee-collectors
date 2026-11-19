@@ -52,7 +52,17 @@
       "id": 1,
       "result": {
         "number": "0x14015ee",
-        "hash": "0xe1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+        "hash": "0xe1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+        "timestamp": "0x691c43b8"
+      }
+    },
+    "202555|eth_getBlockByNumber|[\"0x14015e6\",false]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "number": "0x14015e6",
+        "hash": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+        "timestamp": "0x691c43a0"
       }
     },
     "38833|eth_blockNumber|[]": {
@@ -86,7 +96,17 @@
       "id": 1,
       "result": {
         "number": "0x6c0d39",
-        "hash": "0xe2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"
+        "hash": "0xe2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+        "timestamp": "0x691c43c4"
+      }
+    },
+    "38833|eth_getBlockByNumber|[\"0x6c0d36\",false]": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "number": "0x6c0d36",
+        "hash": "0xb7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7",
+        "timestamp": "0x691c43ac"
       }
     }
   }

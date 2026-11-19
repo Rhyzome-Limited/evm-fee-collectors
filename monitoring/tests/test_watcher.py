@@ -28,6 +28,10 @@ def bhash(n, salt=0):
     return "0x%064x" % (n * 31 + 7 + salt)
 
 
+def blk(n, salt=0, ts="0x6553f100"):
+    return {"hash": bhash(n, salt), "timestamp": ts}
+
+
 def topic(addr):
     return "0x" + "0" * 24 + addr[2:].lower()
 
@@ -63,7 +67,7 @@ class FakeRPC:
             return hex(self.head)
         if method == "eth_getBlockByNumber":
             n = int(params[0], 16)
-            return self.blocks[n] if n in self.blocks else {"hash": bhash(n)}
+            return self.blocks[n] if n in self.blocks else blk(n)
         if method == "eth_getLogs":
             lo, hi = int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)
             result = [l for l in self.logs if lo <= int(l["blockNumber"], 16) <= hi]
@@ -132,7 +136,7 @@ class PollTests(Base):
     def test_matching_log_emits_one_alert(self):
         head = S1 + 10
         log = mklog(S1 + 3, address=BRIDGE.upper().replace("0X", "0x"), t0=OWNER, prev=ALICE, new=BOB, idx=2)
-        rpc = FakeRPC(head, [log])
+        rpc = FakeRPC(head, [log], blocks={S1 + 3: blk(S1 + 3, ts="0x691c43a0")})
         _, out, err = self.poll(rpc)
         self.assertEqual(len(out), 1, out)
         a = json.loads(out[0])
@@ -146,7 +150,7 @@ class PollTests(Base):
         self.assertEqual(a["block"], S1 + 3)
         self.assertEqual(a["logIndex"], 2)
         self.assertEqual(a["txHash"], log["transactionHash"])
-        self.assertTrue(a["timestamp"].endswith("+00:00"))
+        self.assertEqual(a["timestamp"], "2025-11-18T10:00:00+00:00")
         (flt,) = rpc.log_calls()
         self.assertEqual(flt["address"], sorted(w.CHAINS[KASPLEX]["targets"]))
         self.assertEqual(len(flt["address"]), 3)
@@ -156,6 +160,47 @@ class PollTests(Base):
         self.assertEqual(self.saved()["block"], head)
         self.assertEqual(self.saved()["seen"], ["%s:2" % log["transactionHash"]])
         self.assertEqual(err, [])
+
+    def test_block_time_read_once_per_block(self):
+        head = S1 + 10
+        logs = [mklog(S1 + 3, idx=0), mklog(S1 + 3, t0=WITHDRAWER, idx=1), mklog(S1 + 5, new=BOB)]
+        rpc = FakeRPC(head, logs, blocks={S1 + 3: blk(S1 + 3, ts="0x691c43a0"),
+                                          S1 + 5: blk(S1 + 5, ts="0x691c43ac")})
+        _, out, err = self.poll(rpc)
+        self.assertEqual([json.loads(l)["timestamp"] for l in out],
+                         ["2025-11-18T10:00:00+00:00", "2025-11-18T10:00:00+00:00", "2025-11-18T10:00:12+00:00"])
+        seq = [(m, p[0]) if m == "eth_getBlockByNumber" else m for m, p in rpc.calls]
+        blk_call = "eth_getBlockByNumber"
+        self.assertEqual(seq, ["eth_blockNumber", (blk_call, hex(head)), "eth_getLogs", (blk_call, hex(head)),
+                               (blk_call, hex(S1 + 3)), (blk_call, hex(S1 + 5))])
+        self.assertEqual(err, [])
+
+    def test_event_in_anchor_block_reuses_anchor_read(self):
+        head = S1 + 10
+        rpc = FakeRPC(head, [mklog(head)], blocks={head: blk(head, ts="0x691c43ac")})
+        _, out, _ = self.poll(rpc)
+        self.assertEqual([json.loads(l)["timestamp"] for l in out], ["2025-11-18T10:00:12+00:00"])
+        self.assertEqual(rpc.calls.count(("eth_getBlockByNumber", [hex(head), False])), 2)
+
+    def test_bad_block_timestamp_is_rpc_error(self):
+        n = S1 + 3
+        cases = {
+            "no timestamp": ({"hash": bhash(n)}, "block %d has no valid timestamp: None"),
+            "decimal string": (blk(n, ts="1700000000"), "block %d has no valid timestamp: '1700000000'"),
+            "int": (blk(n, ts=1700000000), "block %d has no valid timestamp: 1700000000"),
+            "out of range": (blk(n, ts="0x" + "f" * 16), "block %d has no valid timestamp: '0xffffffffffffffff'"),
+            "hash mismatch": (blk(n, salt=1), "block %d header does not match log blockHash"),
+            "null block": (None, "block %d header does not match log blockHash"),  # event block, not the anchor
+        }
+        for name, (bad, detail) in cases.items():
+            with self.subTest(name):
+                rpc = FakeRPC(S1 + 10, [mklog(n)], blocks={n: bad})
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), self.assertRaises(w.RPCError) as ctx:
+                    w.poll_chain(KASPLEX, rpc, self.state(), self.path, 0, None)
+                self.assertEqual(str(ctx.exception), detail % n)
+                self.assertEqual(out.getvalue(), "")
+                self.assertFalse(os.path.exists(self.path))
 
     def test_unrelated_topic_no_alert_cursor_advances(self):
         head = S1 + 10
@@ -243,7 +288,7 @@ class PollTests(Base):
         log_a, log_b = mklog(S1 + 3, new=ALICE), mklog(S1 + 4, new=BOB)
 
         def flip(r):
-            r.blocks[head] = {"hash": bhash(head, salt=1)}
+            r.blocks[head] = blk(head, salt=1)
             r.logs = [log_b]
             r.fail = fail
 
@@ -284,8 +329,8 @@ class PollTests(Base):
         st = self.state({KASPLEX: {"block": cur, "hash": bhash(cur), "seen": []}})
 
         def flip(r):  # the fork point is below the cursor
-            r.blocks[cur] = {"hash": bhash(cur, salt=1)}
-            r.blocks[cur + 10] = {"hash": bhash(cur + 10, salt=1)}
+            r.blocks[cur] = blk(cur, salt=1)
+            r.blocks[cur + 10] = blk(cur + 10, salt=1)
 
         rpc = FakeRPC(cur + 10, after_logs=flip)
         _, _, err = self.poll(rpc, st)
@@ -298,7 +343,7 @@ class PollTests(Base):
         salts = iter(range(1, 100))
 
         def flap(r):
-            r.blocks[head] = {"hash": bhash(head, salt=next(salts))}
+            r.blocks[head] = blk(head, salt=next(salts))
             r.after_logs = flap
 
         rpc = FakeRPC(head, [mklog(S1 + 3)], after_logs=flap)
@@ -390,6 +435,8 @@ class MainTests(Base):
             "two topics only": ("eth_getLogs", lp, [good, dict(mklog(S1 + 2), topics=[OWNER, topic(ALICE)])],
                                 "2 topics"),
             "fixture miss": ("eth_getLogs", lp, None, "fixture miss"),
+            "no anchor timestamp": ("eth_getBlockByNumber", [hex(head), False], {"hash": bhash(head)},
+                                    "block %d has no valid timestamp: None" % head),
         }
         for name, (method, params, bad, detail) in cases.items():
             with self.subTest(name):
@@ -398,7 +445,7 @@ class MainTests(Base):
                 calls = {
                     (KASPLEX, "eth_blockNumber", "[]"): hex(head),
                     (KASPLEX, "eth_getLogs", json.dumps(logs_params(KASPLEX, S1, head))): [],
-                    (KASPLEX, "eth_getBlockByNumber", json.dumps([hex(head), False])): {"hash": bhash(head)},
+                    (KASPLEX, "eth_getBlockByNumber", json.dumps([hex(head), False])): blk(head),
                     (IGRA, "eth_blockNumber", "[]"): hex(S2),  # nothing to scan on IGRA
                 }
                 calls[(KASPLEX, method, json.dumps(params))] = bad
@@ -435,7 +482,7 @@ class MainTests(Base):
             with self.subTest(argv=argv, env=conf_env):
                 env = {} if conf_env is None else {"MONITOR_CONFIRMATIONS": conf_env}
                 with clean_env(**env), mock.patch.object(w, "poll_chain") as pc, mock.patch.object(w, "http_rpc"):
-                    rc, _, err = run(w.main, ["--once", "--state-file", self.path] + argv)
+                    rc, _, err = run(w.main, ["--once", "--backfill", "--state-file", self.path] + argv)
                 self.assertEqual(rc, 0, err)
                 self.assertEqual([c.args[4] for c in pc.call_args_list], [want] * len(w.CHAINS))
                 self.assertEqual(sum(json.loads(e)["event"] == "config" for e in err), warnings, err)
@@ -457,7 +504,7 @@ class MainTests(Base):
         i = FakeRPC(S2 + 10 + w.MIN_CONFIRMATIONS, fail="eth_blockNumber")
         fakes = {w.CHAINS[KASPLEX]["rpc_url"]: k, w.CHAINS[IGRA]["rpc_url"]: i}
         with clean_env(), mock.patch.object(w, "http_rpc", side_effect=lambda url: fakes[url]):
-            rc, out, err = run(w.main, ["--once", "--state-file", self.path])
+            rc, out, err = run(w.main, ["--once", "--backfill", "--state-file", self.path])
         self.assertEqual(rc, 1)
         self.assertEqual(len(out), 1)
         a = json.loads(out[0])
@@ -498,6 +545,9 @@ class MainTests(Base):
         self.assertEqual(len(alerts), 3)
         self.assertTrue(all(a["type"] == "role_change" for a in alerts))
         self.assertEqual(sorted(a["chainId"] for a in alerts), [IGRA, KASPLEX, KASPLEX])
+        self.assertEqual(sorted(a["timestamp"] for a in alerts),
+                         ["2025-11-18T10:00:00+00:00", "2025-11-18T10:00:00+00:00", "2025-11-18T10:00:12+00:00"])
+        self.assertEqual(err, [])
         self.assertEqual(self.saved(KASPLEX)["block"], S1 + 10)
         self.assertEqual(self.saved(IGRA)["block"], S2 + 10)
 
@@ -524,12 +574,66 @@ class MainTests(Base):
 
         with clean_env(MONITOR_WEBHOOK_URL=HOOK, MONITOR_STATE_FILE=self.path), \
                 mock.patch.object(w.urllib.request, "urlopen", side_effect=urlopen):
-            rc, out, err = run(w.main, ["--once", "--verbose"])
+            rc, out, err = run(w.main, ["--once", "--backfill", "--verbose"])
         self.assertEqual(rc, 0, err)
         self.assertEqual(len(out), 2)
         self.assertEqual(posts, [l.encode() for l in out])
         self.assertEqual(sorted(json.loads(e)["event"] for e in err), ["poll_ok", "poll_ok"])
         self.assertEqual(self.saved(IGRA)["block"], S2 + 10)
+
+    def main_with(self, nodes, argv):
+        """Run main() with one FakeRPC per chain (in CHAINS order); return rc, out, err, seed lines."""
+        fakes = dict(zip((c["rpc_url"] for c in w.CHAINS.values()), nodes))
+        with clean_env(), mock.patch.object(w, "http_rpc", side_effect=lambda url: fakes[url]):
+            rc, out, err = run(w.main, argv + ["--state-file", self.path])
+        seeds = [m for m in map(json.loads, err) if m["event"] == "seed"]
+        return rc, out, err, seeds
+
+    def test_first_run_seeds_and_emits_nothing(self):
+        k = FakeRPC(S1 + 100, [mklog(S1 + 4)])
+        i = FakeRPC(S2 + 200, [mklog(S2 + 2, t0=WITHDRAWER)])
+        rc, out, err, seeds = self.main_with([k, i], ["--once"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, [])
+        self.assertEqual((k.log_calls(), i.log_calls()), ([], []))
+        self.assertEqual(self.saved(KASPLEX), {"block": S1 + 95, "hash": bhash(S1 + 95), "seen": []})
+        self.assertEqual(self.saved(IGRA), {"block": S2 + 195, "hash": bhash(S2 + 195), "seen": []})
+        self.assertEqual(len(err), 2, err)
+        self.assertEqual([(m["level"], m["chainId"]) for m in seeds], [("warning", KASPLEX), ("warning", IGRA)])
+
+    def test_existing_cursor_is_not_reseeded(self):
+        self.seed({KASPLEX: {"block": S1 + 50, "hash": bhash(S1 + 50), "seen": []}})
+        k = FakeRPC(S1 + 100, [mklog(S1 + 60)])
+        i = FakeRPC(S2 + 200, [mklog(S2 + 2)])
+        rc, out, err, seeds = self.main_with([k, i], ["--once"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(k.log_calls()[0]["fromBlock"], hex(S1 + 51))
+        self.assertEqual([json.loads(l)["block"] for l in out], [S1 + 60])
+        self.assertEqual([m["chainId"] for m in seeds], [IGRA])
+        self.assertEqual(i.log_calls(), [])
+
+    def test_backfill_flag_scans_from_deploy_block(self):
+        log = mklog(S1 + 4)
+        k = FakeRPC(S1 + 10 + w.MIN_CONFIRMATIONS, [log])
+        i = FakeRPC(S2 + 10 + w.MIN_CONFIRMATIONS)
+        rc, out, err, seeds = self.main_with([k, i], ["--once", "--backfill"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(k.log_calls()[0]["fromBlock"], hex(S1))
+        self.assertEqual([json.loads(l)["txHash"] for l in out], [log["transactionHash"]])
+        self.assertEqual(seeds, [])
+
+    def test_seed_failure_writes_no_cursor(self):
+        k = FakeRPC(S1 + 100, blocks={S1 + 95: None})
+        i = FakeRPC(S2 + 200)
+        rc, out, err, seeds = self.main_with([k, i], ["--once"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, [])
+        errors = [m for m in map(json.loads, err) if m["event"] == "rpc_error"]
+        self.assertEqual([m["chainId"] for m in errors], [KASPLEX])
+        self.assertIn("not found", errors[0]["detail"])
+        self.assertIsNone(self.saved(KASPLEX))
+        self.assertEqual(self.saved(IGRA)["block"], S2 + 195)
+        self.assertEqual([m["chainId"] for m in seeds], [IGRA])
 
 
 class StateAndConstantTests(Base):

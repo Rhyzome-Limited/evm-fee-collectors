@@ -1,7 +1,7 @@
 """Watch the six live FeeCollector contracts for OwnerSet / WithdrawerSet events.
 
 Stdlib only. One JSON line per role change on stdout; JSON diagnostics on stderr.
-Run: python3 -m monitoring.watcher [--once] [--fixture PATH]. See docs/monitoring-runbook.md.
+Run: python3 -m monitoring.watcher [--once] [--backfill] [--fixture PATH]. See docs/monitoring-runbook.md.
 """
 import argparse
 import http.client
@@ -203,13 +203,23 @@ def save_state(path, state):
 
 # ─── Poll ────────────────────────────────────────────────────────────────────
 
-def _block_hash(rpc, n):
+def _block(rpc, n):
+    """(hash, block time as ISO-8601 UTC) of block n, or None if the node has no such block."""
     b = rpc("eth_getBlockByNumber", [hex(n), False])
     if b is None:
         return None
     if not isinstance(b, dict):
         raise RPCError("block %d is not an object" % n)
-    return _hash32(b.get("hash"))
+    bhash = _hash32(b.get("hash"))
+    try:
+        return bhash, datetime.fromtimestamp(_qty(b.get("timestamp")), timezone.utc).isoformat()
+    except (RPCError, OverflowError, OSError, ValueError):
+        raise RPCError("block %d has no valid timestamp: %r" % (n, b.get("timestamp")))
+
+
+def _block_hash(rpc, n):
+    b = _block(rpc, n)
+    return b and b[0]
 
 
 def post_webhook(url, line):
@@ -220,6 +230,20 @@ def post_webhook(url, line):
             resp.read()
     except Exception as e:  # never log the URL: it can carry a secret
         _log("warning", "webhook_failed", error=type(e).__name__)
+
+
+def seed_chain(chain_id, rpc, state, path, confirmations):
+    """First run without --backfill: store the cursor at head - confirmations, scan no history."""
+    cfg, key = CHAINS[chain_id], str(chain_id)
+    n = max(_qty(rpc("eth_blockNumber", [])) - confirmations, cfg["start_block"] - 1)
+    b = _block(rpc, n)
+    if b is None:
+        raise RPCError("block %d not found" % n)
+    state["chains"][key] = {"block": n, "hash": b[0], "seen": []}
+    save_state(path, state)
+    _log("warning", "seed", chainId=chain_id, block=n, hash=b[0],
+         detail="no cursor: seeded at head - confirmations, earlier events are not scanned "
+                "(use --backfill to scan from the deploy block)")
 
 
 def poll_chain(chain_id, rpc, state, path, confirmations, webhook_url, chunk=LOG_CHUNK):
@@ -250,9 +274,10 @@ def poll_chain(chain_id, rpc, state, path, confirmations, webhook_url, chunk=LOG
     rescans = 0
     while frm <= head:
         to = min(frm + chunk - 1, head)
-        before = _block_hash(rpc, to)
-        if before is None:
+        anchor = _block(rpc, to)
+        if anchor is None:
             raise RPCError("block %d not found" % to)
+        before = anchor[0]
         raw = rpc("eth_getLogs", [{"address": targets, "fromBlock": hex(frm), "toBlock": hex(to),
                                    "topics": [[OWNER_SET, WITHDRAWER_SET]]}])
         if not isinstance(raw, list):
@@ -268,15 +293,21 @@ def poll_chain(chain_id, rpc, state, path, confirmations, webhook_url, chunk=LOG
             check_cursor()  # the fork point can be below the cursor
             frm = block + 1
             continue
+        times = {to: anchor}  # one header read per event block in this range
         for log in logs:
             if log["removed"] or not log["event"] or log["contract"] not in cfg["targets"] or log["key"] in seen:
                 continue
+            if log["block"] not in times:
+                times[log["block"]] = _block(rpc, log["block"])
+            b = times[log["block"]]
+            if b is None or b[0] != log["blockHash"]:  # also a reorg after the anchor check: no alert
+                raise RPCError("block %d header does not match log blockHash" % log["block"])
             alert = {
                 "type": "role_change", "chainId": chain_id, "chain": cfg["name"],
                 "contract": log["contract"], "label": cfg["targets"][log["contract"]],
                 "event": log["event"], "previous": log["previous"], "new": log["new"],
                 "block": log["block"], "blockHash": log["blockHash"], "txHash": log["txHash"],
-                "logIndex": log["logIndex"], "timestamp": _now(),
+                "logIndex": log["logIndex"], "timestamp": b[1],
             }
             line = json.dumps(alert, sort_keys=True)
             print(line, flush=True)
@@ -309,7 +340,10 @@ def main(argv=None):
                         "no minimum with --fixture)")
     p.add_argument("--state-file", default=env("MONITOR_STATE_FILE"),
                    help="cursor file (env MONITOR_STATE_FILE, default monitoring/.state/cursors.json)")
-    p.add_argument("--fixture", help="replay recorded responses: one poll, no network, no webhook")
+    p.add_argument("--backfill", action="store_true",
+                   help="first run only: scan each chain that has no cursor from its deploy block and emit the "
+                        "historical alerts (default: seed the cursor at head - confirmations and emit nothing)")
+    p.add_argument("--fixture", help="replay recorded responses: one poll, no network, no webhook, implies --backfill")
     p.add_argument("--verbose", action="store_true", help="write one poll_ok line per chain to stderr")
     args = p.parse_args(argv)
 
@@ -344,12 +378,16 @@ def main(argv=None):
         return 2
 
     once = args.once or bool(args.fixture)
+    backfill = args.backfill or bool(args.fixture)  # a fixture replays recorded history
     try:
         while True:
             failed = False
             for cid in CHAINS:  # chains are independent: one failure never blocks the other
                 try:
-                    poll_chain(cid, rpcs[cid], state, path, conf, webhook)
+                    if backfill or str(cid) in state["chains"]:  # an existing cursor always wins
+                        poll_chain(cid, rpcs[cid], state, path, conf, webhook)
+                    else:
+                        seed_chain(cid, rpcs[cid], state, path, conf)
                     if args.verbose:
                         _log("info", "poll_ok", chainId=cid, block=state["chains"].get(str(cid), {}).get("block"))
                 except RPCError as e:

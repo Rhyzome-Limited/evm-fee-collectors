@@ -54,6 +54,7 @@ Run all commands from the repo root.
 
 ```bash
 # One poll of both chains, then exit. Exit code 1 if a chain failed.
+# The first run with no state file seeds each cursor and prints no alert (section 5).
 python3 -m monitoring.watcher --once
 
 # Continuous mode (the production mode). Ctrl-C exits with code 0.
@@ -69,7 +70,8 @@ python3 -m monitoring.watcher --once --fixture monitoring/fixtures/sample.json
 | `--interval N` | `MONITOR_INTERVAL` | `60` | Seconds between polls in continuous mode. |
 | `--confirmations N` | `MONITOR_CONFIRMATIONS` | `5` | Stay N blocks behind the head. The minimum is 5: a lower value is raised to 5 with a `config` warning. |
 | `--state-file PATH` | `MONITOR_STATE_FILE` | `monitoring/.state/cursors.json` | The cursor file. |
-| `--fixture PATH` | | none | Replay recorded responses. It implies `--once` and turns off the webhook. It has no confirmations minimum, and the default is 0. |
+| `--backfill` | | off | First run only. Scan each chain that has no cursor from its deploy block and emit the historical alerts. Without it, a chain with no cursor is seeded at head minus confirmations and emits nothing. It never moves a cursor that exists. |
+| `--fixture PATH` | | none | Replay recorded responses. It implies `--once` and turns off the webhook. It has no confirmations minimum, and the default is 0. It implies `--backfill`. |
 | `--verbose` | | off | Write one `poll_ok` line for each chain on stderr. |
 | | `MONITOR_WEBHOOK_URL` | none | POST each alert to this `http` or `https` URL. |
 | | `MONITOR_RPC_202555` | `https://evmrpc.kasplex.org` | RPC endpoint for Kasplex. |
@@ -85,7 +87,7 @@ When `--fixture` is set and no state file is given, the watcher uses a temporary
 
 | Code | Meaning |
 |---|---|
-| 0 | `--once`: all chains polled. Continuous mode: Ctrl-C. |
+| 0 | `--once`: all chains polled or seeded. Continuous mode: Ctrl-C. |
 | 1 | `--once`: one or more chains had an RPC error. The other chains still advanced. |
 | 2 | Configuration error: a corrupt state file, an unreadable fixture, a bad flag, or a webhook URL that is not `http`/`https`. |
 
@@ -106,7 +108,7 @@ WARNING: run one instance only. The watcher has no lock file. Two pollers on one
    sudo -u fee-watcher git -C /opt/fee-watcher/evm-fee-collectors checkout <reviewed-commit>
    ```
    `useradd --create-home` can create `/opt/fee-watcher` with mode `0700` or `0750`. Then the operator cannot `cd` into the checkout, and the `cd` commands in step 5 and in checklist item 9 fail. The `chmod 0755` makes the checkout readable to the operator. Clone with a plain HTTPS URL or SSH, never with a token in `<repo-url>`: git keeps the URL in `.git/config`, and `0755` makes that file readable to every local user. With a plain URL, the checkout holds no secret: the webhook URL is only in `/etc/fee-watcher/watcher.env` (step 4). The state directory stays `0750`. Do not make the checkout writable to other users.
-3. **Create the state directory.** The state file lives in `/var/lib/fee-watcher/cursors.json`. This directory must survive restarts, reboots and redeploys. Do not put the state file in `/tmp` or in the checkout. A lost state file replays the 12 constructor alerts (section 5).
+3. **Create the state directory.** The state file lives in `/var/lib/fee-watcher/cursors.json`. This directory must survive restarts, reboots and redeploys. Do not put the state file in `/tmp` or in the checkout. A lost state file makes the watcher seed again at the current block. Role changes in the gap do not alert. The `seed` warning is the only signal (section 5).
    ```bash
    sudo install -d -o fee-watcher -g fee-watcher -m 0750 /var/lib/fee-watcher
    ```
@@ -125,16 +127,23 @@ WARNING: run one instance only. The watcher has no lock file. Two pollers on one
    systemd reads `EnvironmentFile=` as root before it starts the process, so mode `0600` with owner root works.
 
    WARNING: never pass the webhook URL as a flag, because `ps` shows it. Never put it in the unit file, because `systemctl show` shows `Environment=` values to any user. Never commit it.
-5. **Do the first run (backfill or seed).** Choose one:
-   - **Backfill (default).** Run one poll by hand, without the webhook, so the 12 constructor alerts do not page anyone:
+5. **Do the first run (seed).** Run one poll by hand as `fee-watcher`, without the webhook:
+   ```bash
+   cd /opt/fee-watcher/evm-fee-collectors
+   sudo -u fee-watcher env MONITOR_STATE_FILE=/var/lib/fee-watcher/cursors.json MONITOR_CONFIRMATIONS=5 \
+     python3 -m monitoring.watcher --once > /tmp/seed.jsonl
+   echo "exit=$?"; wc -l < /tmp/seed.jsonl
+   sudo cat /var/lib/fee-watcher/cursors.json
+   ```
+   Expect `exit=0`, 0 lines on stdout, two `seed` lines on stderr (chainId 202555 and 38833), and both chains in `cursors.json` with a `hash`. Events before the seed blocks are not scanned (section 5).
+   - **Option: backfill.** To scan from the deploy blocks instead, run this before any seed, so that no cursor exists yet. Run it without the webhook, so the 12 constructor alerts do not page anyone:
      ```bash
      cd /opt/fee-watcher/evm-fee-collectors
      sudo -u fee-watcher env MONITOR_STATE_FILE=/var/lib/fee-watcher/cursors.json MONITOR_CONFIRMATIONS=5 \
-       python3 -m monitoring.watcher --once > /tmp/backfill.jsonl
+       python3 -m monitoring.watcher --once --backfill > /tmp/backfill.jsonl
      echo "exit=$?"; wc -l < /tmp/backfill.jsonl
      ```
-     Expect `exit=0` and 12 lines. The count is 12 only if no role change occurred on either chain after the deploy block. Each extra line is a role change after the deploy. If there are more than 12 lines, check each extra line with section 8 before you accept the backfill. Do not start the service until each extra line is a confirmed, planned change. Compare each `new` value with the owner and the withdrawer in `DEPLOYMENTS.md`. A mismatch is an incident (section 8).
-   - **Seed.** Follow "Skip backfill" in section 5, with the state file at `/var/lib/fee-watcher/cursors.json`. Run the commands as `fee-watcher`.
+     Expect `exit=0` and 12 lines. The count is 12 only if no role change occurred on either chain after the deploy block. Each extra line is a role change after the deploy. If there are more than 12 lines, check each extra line with section 8 before you accept the backfill. Do not start the service until each extra line is a confirmed, planned change. Compare each `new` value with the owner and the withdrawer in `DEPLOYMENTS.md`. A mismatch is an incident (section 8). Do not put `--backfill` in the unit file.
 6. **Install the systemd unit.** Write `/etc/systemd/system/fee-watcher.service`:
    ```ini
    [Unit]
@@ -203,17 +212,17 @@ WARNING: run one instance only. The watcher has no lock file. Two pollers on one
 Each alert is one line of JSON on stdout, with sorted keys:
 
 ```json
-{"block": 20977126, "blockHash": "0x…", "chain": "Kasplex", "chainId": 202555,
+{"block": 20977134, "blockHash": "0x…", "chain": "Kasplex", "chainId": 202555,
  "contract": "0x2f15c748a51438d02347878a2a0f26bc35b5e938", "event": "OwnerSet",
  "label": "Kasplex Bridge", "logIndex": 0, "new": "0x…", "previous": "0x…",
- "timestamp": "2026-11-18T09:59:05.700972+00:00", "txHash": "0x…", "type": "role_change"}
+ "timestamp": "2026-05-21T08:59:52+00:00", "txHash": "0x…", "type": "role_change"}
 ```
 
 (The example has line breaks for this page. The real alert is one line.)
 
 - All addresses and hashes are lowercase.
 - `previous` is the zero address for the constructor events. `new` is the zero address for a renounce. Both are normal alerts.
-- `timestamp` is the detection time on the watcher host, in UTC. It is not the block time. Use `block` and `blockHash` to order events.
+- `timestamp` is the block time: the `timestamp` of the block that contains the event, in UTC, ISO-8601 with whole seconds. It is not the detection time. If the node gives no valid block time, the watcher sends no alert, writes `rpc_error` and tries again at the next poll.
 - The webhook body is byte-for-byte the same as the stdout line, with `Content-Type: application/json`.
 
 Stdout carries alerts only. You can pipe stdout directly into an alert pipeline.
@@ -231,6 +240,7 @@ All diagnostics are JSON lines on stderr. Each line has `level`, `event` and `ts
 | `state_corrupt` | error | The state file is unreadable. The watcher exits with code 2. | See section 7. |
 | `config` | error | Bad webhook URL or unreadable fixture. The watcher exits with code 2. | Fix the configuration. |
 | `config` | warning | A confirmations value below 5 was raised to 5. | Remove the low value. |
+| `seed` | warning | A chain had no cursor. The watcher stored head minus confirmations and scanned no history. Has `chainId`, `block`, `hash`. | Expected on the first run only. At any other time the state file was lost: see section 7. |
 
 ## 5. State file and first run
 
@@ -248,26 +258,26 @@ The state file (default `monitoring/.state/cursors.json`, ignored by git) has th
 
 The watcher writes the file atomically (temporary file, then rename) after each alert and after each scanned range. After a crash, at most one alert can be sent a second time.
 
-### First run: constructor alerts
+### First run: seed (default)
 
-With no state file, the watcher scans from the deploy block: 20977124 on Kasplex and 7081263 on IGRA. Each contract emitted `OwnerSet` and `WithdrawerSet` in its constructor. **The first run therefore emits 12 alerts** (2 for each of the 6 contracts), all with `previous` = the zero address. These alerts are expected. Compare each `new` value with the owner and withdrawer in `DEPLOYMENTS.md`.
+With no cursor for a chain, and without `--backfill`, the watcher seeds that chain: it stores head minus confirmations, with the hash of that block, as the cursor. It scans no history, emits no alert and writes one `seed` warning on stderr. The next poll starts at the seed block + 1. A cursor that exists always wins: the watcher never seeds a chain again. To seed again, delete the state file deliberately.
 
-### Skip the backfill
+CAUTION: a seeded cursor skips all events before that block. Do not seed past a block that you did not verify by another method.
 
-To start from the current block and skip the history, seed the state file before the first run:
+### Backfill from the deploy block (`--backfill`)
 
-1. Read the current block of each chain:
-   `curl -s -X POST -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' https://evmrpc.kasplex.org`
-2. Do the same for `https://rpc.igralabs.com:8545`.
-3. Convert each hex result to decimal.
-4. Write the state file with `"hash": null`:
+With `--backfill` and no cursor, the watcher scans from the deploy block: 20977124 on Kasplex and 7081263 on IGRA. Each contract emitted `OwnerSet` and `WithdrawerSet` in its constructor. **A backfill therefore emits 12 alerts** (2 for each of the 6 contracts), all with `previous` = the zero address. These alerts are expected. Compare each `new` value with the owner and withdrawer in `DEPLOYMENTS.md`. `--backfill` has no effect on a chain that has a cursor.
+
+### Seed at a chosen block (manual)
+
+This is optional. Use it only to start at a block other than the current one. Write the state file before the first run:
+
+1. Write the state file with `"hash": null`:
    ```json
    {"version": 1, "chains": {"202555": {"block": <kasplex block>, "hash": null, "seen": []},
                              "38833":  {"block": <igra block>,    "hash": null, "seen": []}}}
    ```
-5. Run `python3 -m monitoring.watcher --once`. It must exit with code 0.
-
-CAUTION: a seeded cursor skips all events before that block. Do not seed past a block that you did not verify by another method.
+2. Run `python3 -m monitoring.watcher --once`. It must exit with code 0.
 
 ## 6. Grafana wiring
 
@@ -320,7 +330,7 @@ Use these two saved queries:
 | 5 | Saved query: watcher health | Save the **Watcher health** query. | `poll_ok` lines for chainId 202555 and 38833, about one each 60 seconds. No `rpc_error` lines. | |
 | 6 | Alert rule: role change | Grafana-managed rule on Loki: `sum by (chainId, label, event) (count_over_time({job="fee-watcher"} \| json \| type="role_change" [5m])) > 0`. Evaluate every 1m, pending period 0s. Set "Alert state if no data" to **Normal**. With no matching line the query returns no data, and the default state is **No data**, not **Normal**. This rule does not detect a silent watcher: item 7 does. | The rule is **Normal** now, not **No data**. It goes to **Firing** within 2 minutes of the Loki test in item 9. | |
 | 7 | Alert rule: watcher dead | `absent_over_time({job="fee-watcher"} \| json \| event="poll_ok" [10m])`, condition `> 0`. Set "Alert state if no data" to **Normal**, because a live watcher makes this query return no data. A dead watcher is silent, so this rule is mandatory. Test: `sudo systemctl stop fee-watcher`, wait, then start it again. | **Firing** about 11 minutes after the stop. **Normal** again after the start. | |
-| 8 | Extra rules | RPC errors: `sum by (chainId) (count_over_time({job="fee-watcher"} \| json \| event="rpc_error" [10m])) >= 10`. Webhook failures: `count_over_time({job="fee-watcher"} \| json \| event="webhook_failed" [5m]) > 0`. On both rules, set "Alert state if no data" to **Normal**, for the same reason as item 6. A silent watcher makes these rules **Normal** too, so item 7 must be in place. | Both rules are **Normal**, not **No data**. | |
+| 8 | Extra rules | RPC errors: `sum by (chainId) (count_over_time({job="fee-watcher"} \| json \| event="rpc_error" [10m])) >= 10`. Webhook failures: `count_over_time({job="fee-watcher"} \| json \| event="webhook_failed" [5m]) > 0`. Seed after go-live (a lost state file): `count_over_time({job="fee-watcher"} \| json \| event="seed" [5m]) > 0`. On all three rules, set "Alert state if no data" to **Normal**, for the same reason as item 6. A silent watcher makes these rules **Normal** too, so item 7 must be in place. | All three rules are **Normal**, not **No data**. | |
 | 9 | Webhook path end to end, with one real alert line | Tell the on-call person first. On the watcher host, run the commands under this table. | `curl` prints a `2xx` code. IRM shows one alert group with the raw JSON. The second, different line makes a second group (step 6 above). The on-call person gets the page. The Loki line makes the item 6 rule fire. | |
 | 10 | Contact point and notification test | **Alerting** > **Contact points**: one contact point of type **Grafana IRM**. A notification policy routes the rules of items 6 to 8 to it. Click **Test**. | The test notification arrives in IRM and reaches the on-call person. | |
 | 11 | Retention | In the Grafana Cloud portal, read the Logs retention of the stack. | Retention is at least 30 days, enough for an incident review. | |
@@ -350,8 +360,10 @@ The fixture alerts use fake `new` addresses (`0x1111…`, `0x2222…`). Responde
 | Repeated `rpc_error` with a range-limit or "too many results" detail on one chain | The provider rejects a 2000-block `eth_getLogs` range. | Lower `LOG_CHUNK` in `watcher.py` (for example to 500) and restart. |
 | Repeated `rpc_error` with `URLError` or `timeout` | The RPC endpoint is down or slow. | Wait, or point `MONITOR_RPC_<chainId>` to another endpoint. The cursor does not move, so no events are lost. |
 | `rpc_error` with `block N not found` | A load-balanced node lags behind. | None. The next poll retries. Alerts already sent are in `seen`. |
+| `rpc_error` with `no valid timestamp` or `does not match log blockHash` | The node gave a block header without a valid block time, or a header that does not agree with its logs. | None if it is rare: the next poll retries, and the cursor does not move. If it repeats, point `MONITOR_RPC_<chainId>` to another endpoint. |
 | Frequent `reorg` warnings | A node lags, or the chain re-orgs. | Raise `MONITOR_CONFIRMATIONS`. |
-| Exit code 2 with `state_corrupt` | The state file is damaged. | Do not delete the file without a decision. Delete it to replay from the deploy blocks (12+ old alerts), or rebuild it with the seed procedure in section 5. |
+| Exit code 2 with `state_corrupt` | The state file is damaged. | Do not delete the file without a decision. Delete it and run `--once --backfill` without the webhook to replay from the deploy blocks, or delete it and let the watcher seed (this skips the gap). |
+| Unexpected `seed` warning after go-live | The state file was lost or replaced. The watcher seeded at head minus confirmations and scanned no history. | Role changes in the gap did not alert. Find out why the state file was lost. Replay with `--once --backfill` only after a decision, because it re-sends the historical alerts. `--backfill` does not move a cursor that exists, so delete the new state file first. |
 | No alerts and no `poll_ok` lines | The watcher stopped, or stderr is not shipped. | Check the process supervisor and the log shipper. |
 
 ## 8. Respond to a role-change alert
@@ -369,6 +381,7 @@ WARNING: an unplanned `OwnerSet` gives full control of the contract to `new`. Th
 ## 9. Limits
 
 - An ownership proposal (`OwnershipTransferProposed`) does not alert. Only the accepted transfer (`OwnerSet`) alerts.
+- The default first run seeds. Events before the seed block never alert.
 - A re-org deeper than 12 blocks is not fully scanned again.
 - After a re-org, a transaction mined again with a different `logIndex` alerts a second time.
 - Delivery is at-least-once only for the alert in progress at a crash.
