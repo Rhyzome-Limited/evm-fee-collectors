@@ -67,9 +67,9 @@ python3 -m monitoring.watcher --once --fixture monitoring/fixtures/sample.json
 |---|---|---|---|
 | `--once` | | off | Poll each chain one time, then exit. |
 | `--interval N` | `MONITOR_INTERVAL` | `60` | Seconds between polls in continuous mode. |
-| `--confirmations N` | `MONITOR_CONFIRMATIONS` | `0` | Stay N blocks behind the head. |
+| `--confirmations N` | `MONITOR_CONFIRMATIONS` | `5` | Stay N blocks behind the head. The minimum is 5: a lower value is raised to 5 with a `config` warning. |
 | `--state-file PATH` | `MONITOR_STATE_FILE` | `monitoring/.state/cursors.json` | The cursor file. |
-| `--fixture PATH` | | none | Replay recorded responses. It implies `--once` and turns off the webhook. |
+| `--fixture PATH` | | none | Replay recorded responses. It implies `--once` and turns off the webhook. It has no confirmations minimum, and the default is 0. |
 | `--verbose` | | off | Write one `poll_ok` line for each chain on stderr. |
 | | `MONITOR_WEBHOOK_URL` | none | POST each alert to this `http` or `https` URL. |
 | | `MONITOR_RPC_202555` | `https://evmrpc.kasplex.org` | RPC endpoint for Kasplex. |
@@ -77,7 +77,7 @@ python3 -m monitoring.watcher --once --fixture monitoring/fixtures/sample.json
 
 The webhook URL is an env variable only, not a flag. A flag value is visible in `ps` output.
 
-Set `MONITOR_CONFIRMATIONS` to 5 or more in production. With 0, a re-org between the log query and the block-hash read can hide an event on the new branch.
+The watcher stays 5 blocks behind the head by default. `MONITOR_CONFIRMATIONS` and `--confirmations` can only raise this value. The watcher also reads the hash of the last block of each range before and after the log query. If the hash changed, the watcher sends no alert from that range, writes a `reorg` warning and scans the range again.
 
 When `--fixture` is set and no state file is given, the watcher uses a temporary state file. A fixture run never moves the production cursor.
 
@@ -226,10 +226,11 @@ All diagnostics are JSON lines on stderr. Each line has `level`, `event` and `ts
 |---|---|---|---|
 | `poll_ok` | info | A chain poll completed (only with `--verbose`). Has `chainId` and `block`. | None. Its absence is the "watcher dead" signal. |
 | `rpc_error` | error | A chain poll failed. Has `chainId` and `detail`. The cursor stays at the last saved block. | See section 7. |
-| `reorg` | warning | The stored cursor block hash changed. The watcher rewinds 12 blocks. | None if it is rare. Raise `MONITOR_CONFIRMATIONS` if it is frequent. |
+| `reorg` | warning | The stored cursor block hash changed: the watcher rewinds 12 blocks. Or the hash of the last block of a range changed during the log query: the watcher sends no alert from that range and scans it again. | None if it is rare. Raise `MONITOR_CONFIRMATIONS` if it is frequent. |
 | `webhook_failed` | warning | The webhook POST failed. Has `error` (the exception class only, never the URL). The alert is still on stdout and the cursor advances. | Check the webhook endpoint. The watcher does not retry the POST. |
 | `state_corrupt` | error | The state file is unreadable. The watcher exits with code 2. | See section 7. |
 | `config` | error | Bad webhook URL or unreadable fixture. The watcher exits with code 2. | Fix the configuration. |
+| `config` | warning | A confirmations value below 5 was raised to 5. | Remove the low value. |
 
 ## 5. State file and first run
 

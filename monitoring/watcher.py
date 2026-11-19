@@ -47,6 +47,7 @@ CHAINS = {
 }
 
 REORG_DEPTH = 12
+MIN_CONFIRMATIONS = 5  # default and floor for a live RPC; the range anchor check does not catch every race
 REORG_RETRIES = 3  # re-scans of a range with a changing anchor hash before the poll fails
 LOG_CHUNK = 2000
 SEEN_MAX = 512
@@ -303,13 +304,20 @@ def main(argv=None):
     p.add_argument("--once", action="store_true", help="poll each chain one time, then exit (1 if any chain failed)")
     p.add_argument("--interval", type=_nonneg, default=env("MONITOR_INTERVAL", "60"),
                    help="seconds between polls in loop mode (env MONITOR_INTERVAL, default 60)")
-    p.add_argument("--confirmations", type=_nonneg, default=env("MONITOR_CONFIRMATIONS", "0"),
-                   help="stay this many blocks behind head (env MONITOR_CONFIRMATIONS, default 0)")
+    p.add_argument("--confirmations", type=_nonneg, default=env("MONITOR_CONFIRMATIONS"),
+                   help="stay this many blocks behind head (env MONITOR_CONFIRMATIONS, default and minimum 5; "
+                        "no minimum with --fixture)")
     p.add_argument("--state-file", default=env("MONITOR_STATE_FILE"),
                    help="cursor file (env MONITOR_STATE_FILE, default monitoring/.state/cursors.json)")
     p.add_argument("--fixture", help="replay recorded responses: one poll, no network, no webhook")
     p.add_argument("--verbose", action="store_true", help="write one poll_ok line per chain to stderr")
     args = p.parse_args(argv)
+
+    floor = 0 if args.fixture else MIN_CONFIRMATIONS
+    conf = floor if args.confirmations is None else args.confirmations
+    if conf < floor:
+        _log("warning", "config", detail="confirmations %d is below the minimum %d, using %d" % (conf, floor, floor))
+        conf = floor
 
     webhook = None if args.fixture else env("MONITOR_WEBHOOK_URL") or None
     if webhook and urllib.parse.urlsplit(webhook).scheme not in ("http", "https"):
@@ -341,7 +349,7 @@ def main(argv=None):
             failed = False
             for cid in CHAINS:  # chains are independent: one failure never blocks the other
                 try:
-                    poll_chain(cid, rpcs[cid], state, path, args.confirmations, webhook)
+                    poll_chain(cid, rpcs[cid], state, path, conf, webhook)
                     if args.verbose:
                         _log("info", "poll_ok", chainId=cid, block=state["chains"].get(str(cid), {}).get("block"))
                 except RPCError as e:

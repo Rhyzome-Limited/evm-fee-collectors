@@ -416,6 +416,28 @@ class MainTests(Base):
                 with open(self.path, "rb") as f:
                     self.assertEqual(f.read(), before)
 
+    def test_confirmations_floor(self):
+        fx = ["--fixture", SAMPLE]
+        # (argv, env MONITOR_CONFIRMATIONS, confirmations given to poll_chain, config warnings)
+        rows = [
+            ([], None, 5, 0),
+            ([], "0", 5, 1),
+            ([], "3", 5, 1),
+            ([], "12", 12, 0),
+            (["--confirmations", "2"], None, 5, 1),
+            (["--confirmations", "9"], "12", 9, 0),
+            (fx, None, 0, 0),
+            (fx + ["--confirmations", "3"], None, 3, 0),
+        ]
+        for argv, conf_env, want, warnings in rows:
+            with self.subTest(argv=argv, env=conf_env):
+                env = {} if conf_env is None else {"MONITOR_CONFIRMATIONS": conf_env}
+                with clean_env(**env), mock.patch.object(w, "poll_chain") as pc, mock.patch.object(w, "http_rpc"):
+                    rc, _, err = run(w.main, ["--once", "--state-file", self.path] + argv)
+                self.assertEqual(rc, 0, err)
+                self.assertEqual([c.args[4] for c in pc.call_args_list], [want] * len(w.CHAINS))
+                self.assertEqual(sum(json.loads(e)["event"] == "config" for e in err), warnings, err)
+
     def test_corrupt_state_exits_2(self):
         os.makedirs(os.path.dirname(self.path))
         for body in ("{not json", '{"version": 2, "chains": {}}', '{"version": 1, "chains": {"1": {"block": "x"}}}'):
@@ -429,8 +451,8 @@ class MainTests(Base):
                 self.assertEqual(json.loads(err[0])["event"], "state_corrupt")
 
     def test_chains_are_isolated(self):
-        k = FakeRPC(S1 + 10, [mklog(S1 + 4)])
-        i = FakeRPC(S2 + 10, fail="eth_blockNumber")
+        k = FakeRPC(S1 + 10 + w.MIN_CONFIRMATIONS, [mklog(S1 + 4)])
+        i = FakeRPC(S2 + 10 + w.MIN_CONFIRMATIONS, fail="eth_blockNumber")
         fakes = {w.CHAINS[KASPLEX]["rpc_url"]: k, w.CHAINS[IGRA]["rpc_url"]: i}
         with clean_env(), mock.patch.object(w, "http_rpc", side_effect=lambda url: fakes[url]):
             rc, out, err = run(w.main, ["--once", "--state-file", self.path])
@@ -485,8 +507,8 @@ class MainTests(Base):
         self.assertFalse(os.path.exists(default))
 
     def test_main_http_end_to_end(self):
-        nodes = {w.CHAINS[KASPLEX]["rpc_url"]: FakeRPC(S1 + 10, [mklog(S1 + 1)]),
-                 w.CHAINS[IGRA]["rpc_url"]: FakeRPC(S2 + 10, [mklog(S2 + 2, t0=WITHDRAWER)])}
+        nodes = {w.CHAINS[KASPLEX]["rpc_url"]: FakeRPC(S1 + 10 + w.MIN_CONFIRMATIONS, [mklog(S1 + 1)]),
+                 w.CHAINS[IGRA]["rpc_url"]: FakeRPC(S2 + 10 + w.MIN_CONFIRMATIONS, [mklog(S2 + 2, t0=WITHDRAWER)])}
         posts = []
 
         def urlopen(req, timeout=None):
